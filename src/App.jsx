@@ -673,11 +673,8 @@ function LoginScreen({ onLogin }) {
       <div className="w-full max-w-2xl grid md:grid-cols-2 rounded-3xl overflow-hidden" style={{ boxShadow: "0 30px 80px -20px rgba(0,0,0,0.5)" }}>
         <div className="hidden md:flex flex-col justify-between p-8" style={{ background: "linear-gradient(160deg,#2E2049,#1B1226)" }}>
           <div>
-            <div className="flex items-center gap-2.5 mb-10">
-              <img src={LOGO_CBS} alt="CBS" style={{ height: 34, width: "auto", flexShrink: 0 }} />
-              <span className="cbs-display text-white text-xs whitespace-nowrap" style={{ letterSpacing: "0.02em" }}>PT. Cahaya Bintang Sempurna</span>
-            </div>
             <h1 className="cbs-display text-white text-2xl leading-tight mb-4">Sales<br/>Performance<br/>Dashboard</h1>
+            <span className="text-white text-xs whitespace-nowrap" style={{ letterSpacing: "0.02em", fontWeight: 400 }}>PT. Cahaya Bintang Sempurna</span>
           </div>
           <div className="flex items-center flex-nowrap gap-x-3">
             {BRAND_ORDER.map(b => (
