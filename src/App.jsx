@@ -670,8 +670,8 @@ function LoginScreen({ onLogin }) {
   return (
     <div className="cbs-root min-h-screen flex items-center justify-center p-6" style={{ background: "linear-gradient(135deg, #241934, #2E2049 55%, #241934)" }}>
       <GlobalStyle />
-      <div className="w-full max-w-4xl grid md:grid-cols-2 rounded-3xl overflow-hidden" style={{ boxShadow: "0 30px 80px -20px rgba(0,0,0,0.5)" }}>
-        <div className="hidden md:flex flex-col justify-between p-10" style={{ background: "linear-gradient(160deg,#2E2049,#1B1226)" }}>
+      <div className="w-full max-w-2xl grid md:grid-cols-2 rounded-3xl overflow-hidden" style={{ boxShadow: "0 30px 80px -20px rgba(0,0,0,0.5)" }}>
+        <div className="hidden md:flex flex-col justify-between p-8" style={{ background: "linear-gradient(160deg,#2E2049,#1B1226)" }}>
           <div>
             <div className="flex items-center gap-2.5 mb-10">
               <img src={LOGO_CBS} alt="CBS" style={{ height: 34, width: "auto" }} />
@@ -685,7 +685,7 @@ function LoginScreen({ onLogin }) {
             ))}
           </div>
         </div>
-        <div className="bg-white p-10 flex flex-col justify-center">
+        <div className="bg-white p-8 flex flex-col justify-center">
           <h2 className="cbs-display text-2xl mb-6" style={{ color: "#241934" }}>Masuk</h2>
           <form onSubmit={submit} className="space-y-3">
             <div>
