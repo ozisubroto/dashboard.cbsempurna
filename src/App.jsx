@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import {
   LayoutDashboard, MapPin, Package, Target, Sparkles, UploadCloud,
-  LogOut, Lock, User, ChevronDown, X, Search, TrendingUp, TrendingDown,
+  LogOut, Lock, User, ChevronDown, ChevronLeft, ChevronRight, X, Search, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Building2, Globe2, CheckCircle2, AlertCircle,
   ArrowUpDown
 } from "lucide-react";
@@ -151,6 +151,7 @@ function computeDashboardSeries(M, f) {
     if (M.txYear[i] !== f.year) continue;
     const trxLabel = d.trx[tx.trx[i]];
     if (trxLabel !== f.trx) continue;
+    if (f.month !== "ALL" && M.txMonth[i] !== f.month) continue;
     const regionLabel = d.reg[tx.reg[i]];
     if (!inSet(f.regions, regionLabel)) continue;
     const areaLabel = d.area[tx.area[i]];
@@ -199,6 +200,7 @@ function computeYearTarget(M, f) {
     if (M.tgtYear[i] !== f.year) continue;
     const trxLabel = d.trx[tgt.trx[i]];
     if (trxLabel !== f.trx) continue;
+    if (f.month !== "ALL" && M.tgtMonth[i] !== f.month) continue;
     const regionLabel = d.reg[tgt.reg[i]];
     if (!inSet(f.regions, regionLabel)) continue;
     const areaLabel = d.area[tgt.area[i]];
@@ -626,11 +628,24 @@ function KPICard({ icon: Icon, label, value, sub, accent, trend }) {
   );
 }
 
-function RoundTopBar(props) {
-  const { fill, x, y, width, height, radius } = props;
-  const r = Math.min(radius || 0, width / 2, Math.max(height, 0));
+function StackSegmentShape(props) {
+  const { fill, x, y, width, height, payload, dataKey, brands, radius } = props;
   if (height <= 0) return null;
-  const path = `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`;
+  const activeBrands = (brands || []).filter(b => payload && payload[b] > 0);
+  if (activeBrands.length === 0) return null;
+  const isBottom = dataKey === activeBrands[0];
+  const isTop = dataKey === activeBrands[activeBrands.length - 1];
+  const r = Math.max(0, Math.min(radius || 0, width / 2, height / 2));
+  let path;
+  if (isBottom && isTop) {
+    path = `M${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x + r},${y + height} Q${x},${y + height} ${x},${y + height - r} Z`;
+  } else if (isTop) {
+    path = `M${x},${y + height} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + width - r},${y} Q${x + width},${y} ${x + width},${y + r} L${x + width},${y + height} Z`;
+  } else if (isBottom) {
+    path = `M${x},${y} L${x + width},${y} L${x + width},${y + height - r} Q${x + width},${y + height} ${x + width - r},${y + height} L${x + r},${y + height} Q${x},${y + height} ${x},${y + height - r} Z`;
+  } else {
+    path = `M${x},${y} L${x + width},${y} L${x + width},${y + height} L${x},${y + height} Z`;
+  }
   return <path d={path} fill={fill} />;
 }
 
@@ -722,47 +737,66 @@ const NAV_ITEMS = [
   { id: "insight", label: "Insight", icon: Sparkles },
 ];
 
-function Sidebar({ page, setPage, user, onLogout, dataMeta }) {
+function Sidebar({ page, setPage, user, onLogout, dataMeta, collapsed, onToggleCollapse }) {
+  const w = collapsed ? 76 : 244;
   return (
-    <div className="hidden md:flex flex-col shrink-0" style={{ width: 244, background: "linear-gradient(180deg, #2E2049, #1B1226)" }}>
-      <div className="flex items-center gap-2.5 px-5 py-6">
-        <img src={LOGO_CBS} alt="CBS" style={{ height: 30, width: "auto" }} />
-        <div>
-          <div className="cbs-display text-white text-sm leading-tight">PT. Cahaya Bintang</div>
-          <div className="text-[10px] tracking-widest uppercase" style={{ color: "#8A7FA0" }}>Sempurna</div>
-        </div>
+    <div className="hidden md:flex flex-col shrink-0 relative" style={{ width: w, background: "linear-gradient(180deg, #2E2049, #1B1226)", transition: "width .18s ease" }}>
+      <button onClick={onToggleCollapse} title={collapsed ? "Perluas menu" : "Ciutkan menu"}
+        className="absolute flex items-center justify-center rounded-full"
+        style={{ top: 22, right: -11, width: 22, height: 22, background: "#CC9B3B", color: "#1B1226", boxShadow: "0 2px 6px rgba(0,0,0,0.3)", zIndex: 5 }}>
+        {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+      </button>
+      <div className={"flex items-center gap-2.5 py-6 " + (collapsed ? "justify-center px-2" : "px-5")}>
+        <img src={LOGO_CBS} alt="CBS" style={{ height: 30, width: "auto", flexShrink: 0 }} />
+        {!collapsed && (
+          <div>
+            <div className="cbs-display text-white text-sm leading-tight">PT. Cahaya Bintang</div>
+            <div className="text-[10px] tracking-widest uppercase" style={{ color: "#8A7FA0" }}>Sempurna</div>
+          </div>
+        )}
       </div>
-      <div className="px-3 flex-1 py-2 space-y-1">
+      <div className={"flex-1 py-2 space-y-1 " + (collapsed ? "px-2" : "px-3")}>
         {NAV_ITEMS.map(item => (
-          <button key={item.id} onClick={() => setPage(item.id)}
-            className={"cbs-navitem w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm " + (page === item.id ? "active" : "")}
+          <button key={item.id} onClick={() => setPage(item.id)} title={item.label}
+            className={"cbs-navitem w-full flex items-center rounded-xl text-sm " + (collapsed ? "justify-center py-2.5" : "gap-3 px-3 py-2.5") + " " + (page === item.id ? "active" : "")}
             style={{ color: page === item.id ? "#fff" : "#B8AECB", fontWeight: page === item.id ? 600 : 400 }}>
             <item.icon size={16} />
-            {item.label}
+            {!collapsed && item.label}
           </button>
         ))}
         {user.role === "admin" && (
-          <button onClick={() => setPage("upload")}
-            className={"cbs-navitem w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm " + (page === "upload" ? "active" : "")}
+          <button onClick={() => setPage("upload")} title="Upload Data"
+            className={"cbs-navitem w-full flex items-center rounded-xl text-sm " + (collapsed ? "justify-center py-2.5" : "gap-3 px-3 py-2.5") + " " + (page === "upload" ? "active" : "")}
             style={{ color: page === "upload" ? "#fff" : "#B8AECB", fontWeight: page === "upload" ? 600 : 400 }}>
             <UploadCloud size={16} />
-            Upload Data
+            {!collapsed && "Upload Data"}
           </button>
         )}
       </div>
-      <div className="px-4 pb-2 text-[11px]" style={{ color: "#7A6E93" }}>
-        {dataMeta.txCount.toLocaleString("id-ID")} baris transaksi · {dataMeta.years.join("–")}
-      </div>
-      <div className="mx-3 mb-4 p-3 rounded-xl flex items-center gap-2" style={{ background: "rgba(255,255,255,0.06)" }}>
-        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold" style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}>
+      {!collapsed && (
+        <div className="px-4 pb-2 text-[11px]" style={{ color: "#7A6E93" }}>
+          {dataMeta.txCount.toLocaleString("id-ID")} baris transaksi · {dataMeta.years.join("–")}
+        </div>
+      )}
+      <div className={"mx-3 mb-4 p-3 rounded-xl flex items-center " + (collapsed ? "justify-center" : "gap-2")} style={{ background: "rgba(255,255,255,0.06)" }}>
+        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}>
           {user.name.slice(0, 1)}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-xs text-white truncate">{user.name}</div>
-          <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{user.role}</div>
-        </div>
-        <button onClick={onLogout} title="Keluar"><LogOut size={15} color="#B8AECB" /></button>
+        {!collapsed && (
+          <>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-white truncate">{user.name}</div>
+              <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{user.role}</div>
+            </div>
+            <button onClick={onLogout} title="Keluar"><LogOut size={15} color="#B8AECB" /></button>
+          </>
+        )}
       </div>
+      {collapsed && (
+        <div className="flex justify-center pb-4">
+          <button onClick={onLogout} title="Keluar"><LogOut size={15} color="#B8AECB" /></button>
+        </div>
+      )}
     </div>
   );
 }
@@ -787,15 +821,17 @@ function MobileNav({ page, setPage, user, onLogout }) {
    ============================================================ */
 function DashboardPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
+  const [month, setMonth] = useState("ALL");
   const [regions, setRegions] = useState([]);
   const [areas, setAreas] = useState([]);
   const [kotas, setKotas] = useState([]);
   const [brands, setBrands] = useState([]);
 
-  const si = useMemo(() => computeDashboardSeries(M, { year, trx: "Selling In", regions, areas, kotas, brands }), [M, year, regions, areas, kotas, brands]);
-  const so = useMemo(() => computeDashboardSeries(M, { year, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, regions, areas, kotas, brands]);
-  const targetSI = useMemo(() => computeYearTarget(M, { year, trx: "Target SI", regions, areas, kotas, brands }), [M, year, regions, areas, kotas, brands]);
-  const targetSO = useMemo(() => computeYearTarget(M, { year, trx: "Target SO", regions, areas, kotas, brands }), [M, year, regions, areas, kotas, brands]);
+  const monthNum = month === "ALL" ? "ALL" : parseInt(month, 10);
+  const si = useMemo(() => computeDashboardSeries(M, { year, month: monthNum, trx: "Selling In", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
+  const so = useMemo(() => computeDashboardSeries(M, { year, month: monthNum, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
+  const targetSI = useMemo(() => computeYearTarget(M, { year, month: monthNum, trx: "Target SI", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
+  const targetSO = useMemo(() => computeYearTarget(M, { year, month: monthNum, trx: "Target SO", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
   const pctSI = targetSI > 0 ? (si.total / targetSI) * 100 : (si.total > 0 ? 100 : 0);
   const pctSO = targetSO > 0 ? (so.total / targetSO) * 100 : (so.total > 0 ? 100 : 0);
 
@@ -804,6 +840,8 @@ function DashboardPage({ M }) {
       <div className="flex flex-wrap items-center gap-2">
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={110}
           options={M.years.map(y => ({ value: y, label: y }))} />
+        <SingleSelect label="Bulan" value={month} onChange={setMonth} width={130}
+          options={[{ value: "ALL", label: "Semua Bulan" }, ...MONTHS.map((m, i) => ({ value: String(i), label: m }))]} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
         <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
         <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
@@ -848,10 +886,10 @@ function ChartCard({ title, subtitle, data, brands }) {
           <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
           <Tooltip formatter={(v, name) => [formatIDR(v), name]} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
-          {brands.map((b, idx) => (
+          {brands.map((b) => (
             <Bar key={b} dataKey={b} stackId="s" fill={BRAND_COLORS[b] || "#999"}
-              shape={idx === brands.length - 1 ? (p => <RoundTopBar {...p} radius={8} />) : undefined}>
-              {idx === brands.length - 1 && <LabelList dataKey={b} content={(p) => <TotalLabel {...p} brands={brands} />} />}
+              shape={(p) => <StackSegmentShape {...p} brands={brands} radius={8} />}>
+              {b === brands[brands.length - 1] && <LabelList dataKey={b} content={(p) => <TotalLabel {...p} brands={brands} />} />}
             </Bar>
           ))}
         </BarChart>
@@ -1304,6 +1342,7 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [raw, setRaw] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     fetch(DATA_URL)
@@ -1352,7 +1391,8 @@ export default function App() {
   return (
     <div className="cbs-root min-h-screen flex">
       <GlobalStyle />
-      <Sidebar page={page} setPage={setPage} user={user} onLogout={() => setUser(null)} dataMeta={dataMeta} />
+      <Sidebar page={page} setPage={setPage} user={user} onLogout={() => setUser(null)} dataMeta={dataMeta}
+        collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
       <div className="flex-1 min-w-0 flex flex-col">
         <MobileNav page={page} setPage={setPage} user={user} onLogout={() => setUser(null)} />
         <div className="px-4 md:px-8 py-3 flex items-center justify-between border-b" style={{ borderColor: "#EDE7F5", background: "#fff" }}>
