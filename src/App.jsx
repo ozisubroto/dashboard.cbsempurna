@@ -965,10 +965,11 @@ function KotaPage({ M }) {
       </div>
       <div className="cbs-card overflow-hidden">
         <div className="overflow-auto cbs-scroll" style={{ maxHeight: "65vh" }}>
-          <table className="w-full text-xs cbs-table" style={{ minWidth: 1050 }}>
+          <table className="w-full text-xs cbs-table" style={{ minWidth: 1090 }}>
             <thead>
               <tr style={{ color: "#8A7FA0" }}>
-                <th className="cbs-sticky-corner text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA" }}>Kota</th>
+                <th className="cbs-sticky-corner text-center px-2 py-2 font-medium" style={{ background: "#F7F5FA", width: 40 }}>No.</th>
+                <th className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }}>Kota</th>
                 {MONTHS.map(m => <th key={m} className="text-right px-1.5 py-2 font-medium">{m}</th>)}
                 <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Total</th>
                 <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Avg</th>
@@ -980,7 +981,8 @@ function KotaPage({ M }) {
                 const rowBg = i % 2 ? "#FCFBFE" : "#fff";
                 return (
                   <tr key={r.kota} style={{ borderTop: "1px solid #F1ECFA", background: rowBg }}>
-                    <td className="cbs-sticky-col px-3 py-1.5 whitespace-nowrap font-medium" style={{ background: rowBg }}>{r.kota}</td>
+                    <td className="cbs-sticky-col text-center px-2 py-1.5" style={{ background: rowBg, width: 40 }}>{i + 1}</td>
+                    <td className="cbs-sticky-col px-3 py-1.5 whitespace-nowrap font-medium" style={{ background: rowBg, left: 40 }}>{r.kota}</td>
                     {r.months.map((v, mi) => <td key={mi} className="text-right px-1.5 py-1.5 tabular-nums" style={{ color: v ? "#241934" : "#D8D0E8" }}>{v ? formatValue(v, true) : "–"}</td>)}
                     <td className="text-right px-2 py-1.5 font-semibold tabular-nums">{formatValue(r.total, true)}</td>
                     <td className="text-right px-2 py-1.5 tabular-nums" style={{ color: "#8A7FA0" }}>{formatValue(r.avg, true)}</td>
@@ -988,12 +990,13 @@ function KotaPage({ M }) {
                   </tr>
                 );
               })}
-              {sortedRows.length === 0 && <tr><td colSpan={16} className="text-center py-10" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</td></tr>}
+              {sortedRows.length === 0 && <tr><td colSpan={17} className="text-center py-10" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</td></tr>}
             </tbody>
             {sortedRows.length > 0 && (
               <tfoot>
                 <tr style={{ borderTop: "2px solid #E4DCF2", background: "#F7F5FA" }}>
-                  <td className="cbs-sticky-col px-3 py-2 font-bold" style={{ background: "#F7F5FA" }}>Total</td>
+                  <td className="cbs-sticky-col px-2 py-2" style={{ background: "#F7F5FA" }}></td>
+                  <td className="cbs-sticky-col px-3 py-2 font-bold" style={{ background: "#F7F5FA", left: 40 }}>Total</td>
                   {footer.months.map((v, mi) => <td key={mi} className="text-right px-1.5 py-2 font-semibold tabular-nums">{v ? formatValue(v, true) : "–"}</td>)}
                   <td className="text-right px-2 py-2 font-bold tabular-nums">{formatValue(footer.total, true)}</td>
                   <td className="text-right px-2 py-2 font-semibold tabular-nums" style={{ color: "#8A7FA0" }}>{formatValue(footer.avg, true)}</td>
@@ -1014,7 +1017,6 @@ function KotaPage({ M }) {
 function ProdukPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
   const [trx, setTrx] = useState("Selling Out");
-  const [chanels, setChanels] = useState([]);
   const [regions, setRegions] = useState([]);
   const [kotas, setKotas] = useState([]);
   const [areas, setAreas] = useState([]);
@@ -1024,8 +1026,8 @@ function ProdukPage({ M }) {
   const [sortMode, setSortMode] = useState("value_desc");
   const [search, setSearch] = useState("");
 
-  const rows = useMemo(() => computeProdukPerformance(M, { year, trx, chanels, regions, kotas, areas, kategoris, brands }),
-    [M, year, trx, chanels, regions, kotas, areas, kategoris, brands]);
+  const rows = useMemo(() => computeProdukPerformance(M, { year, trx, regions, kotas, areas, kategoris, brands }),
+    [M, year, trx, regions, kotas, areas, kategoris, brands]);
   const grandTotal = rows.reduce((a, r) => a + (metric === "amt" ? r.totalAmt : r.totalQty), 0);
 
   const visibleRows = useMemo(() => {
@@ -1048,7 +1050,6 @@ function ProdukPage({ M }) {
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={95} options={M.years.map(y => ({ value: y, label: y }))} />
         <SingleSelect label="Kategori Trx" value={trx} onChange={setTrx} width={145}
           options={[{ value: "Selling Out", label: "Selling Out" }, { value: "Selling In", label: "Selling In" }]} />
-        <MultiSelect label="Chanel" options={["Offline", "Online"]} value={chanels} onChange={setChanels} width={125} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={135} />
         <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={145} />
         <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={135} />
@@ -1068,10 +1069,11 @@ function ProdukPage({ M }) {
       </div>
       <div className="cbs-card overflow-hidden">
         <div className="overflow-auto cbs-scroll" style={{ maxHeight: "65vh" }}>
-          <table className="w-full text-xs cbs-table" style={{ minWidth: 1150 }}>
+          <table className="w-full text-xs cbs-table" style={{ minWidth: 1190 }}>
             <thead>
               <tr style={{ color: "#8A7FA0" }}>
-                <th className="cbs-sticky-corner text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA" }}>Produk</th>
+                <th className="cbs-sticky-corner text-center px-2 py-2 font-medium" style={{ background: "#F7F5FA", width: 40 }}>No.</th>
+                <th className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }}>Produk</th>
                 {MONTHS.map(m => <th key={m} className="text-right px-1.5 py-2 font-medium">{m}</th>)}
                 <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Total</th>
                 <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Avg</th>
@@ -1086,11 +1088,13 @@ function ProdukPage({ M }) {
                 const contribution = metric === "amt" ? r.contributionAmt : r.contributionQty;
                 const fmt = metric === "amt" ? (v => formatValue(v, true)) : formatNum;
                 const rowBg = i % 2 ? "#FCFBFE" : "#fff";
+                const produkDisplay = r.produk.length > 40 ? r.produk.slice(0, 40) + "…" : r.produk;
                 return (
                   <tr key={r.brand + "|" + r.produk} style={{ borderTop: "1px solid #F1ECFA", background: rowBg }}>
-                    <td className="cbs-sticky-col px-3 py-1.5" style={{ background: rowBg, minWidth: 230 }}>
+                    <td className="cbs-sticky-col text-center px-2 py-1.5" style={{ background: rowBg, width: 40 }}>{i + 1}</td>
+                    <td className="cbs-sticky-col px-3 py-1.5" style={{ background: rowBg, left: 40, minWidth: 230 }} title={r.produk}>
                       <span className="inline-block rounded-full mr-1.5" style={{ width: 6, height: 6, background: BRAND_COLORS[r.brand] || "#ccc" }} />
-                      {r.produk}
+                      {produkDisplay}
                     </td>
                     {monthArr.map((v, mi) => <td key={mi} className="text-right px-1.5 py-1.5 tabular-nums" style={{ color: v ? "#241934" : "#D8D0E8" }}>{v ? fmt(v) : "–"}</td>)}
                     <td className="text-right px-2 py-1.5 font-semibold tabular-nums">{fmt(total)}</td>
@@ -1099,7 +1103,7 @@ function ProdukPage({ M }) {
                   </tr>
                 );
               })}
-              {visibleRows.length === 0 && <tr><td colSpan={16} className="text-center py-10" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</td></tr>}
+              {visibleRows.length === 0 && <tr><td colSpan={17} className="text-center py-10" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</td></tr>}
             </tbody>
           </table>
         </div>
