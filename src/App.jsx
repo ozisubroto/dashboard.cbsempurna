@@ -677,7 +677,7 @@ function LoginScreen({ onLogin }) {
               <img src={LOGO_CBS} alt="CBS" style={{ height: 34, width: "auto" }} />
               <span className="cbs-display text-white text-lg tracking-wide">PT. Cahaya Bintang Sempurna</span>
             </div>
-            <h1 className="cbs-display text-white text-4xl leading-tight mb-4">Sales<br/>Performance<br/>Dashboard</h1>
+            <h1 className="cbs-display text-white text-2xl leading-tight mb-4">Sales<br/>Performance<br/>Dashboard</h1>
             <p className="text-sm" style={{ color: "#B8AECB" }}>Selamat datang, Pantau dan Analisis Pencapaian Selling In &amp; Selling Out Anda di sini.</p>
           </div>
           <div className="flex items-center flex-wrap gap-x-6 gap-y-3">
