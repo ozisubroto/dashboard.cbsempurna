@@ -668,7 +668,7 @@ function LoginScreen({ onLogin }) {
     } else setErr("Username atau password salah.");
   }
   return (
-    <div className="cbs-root min-h-screen flex items-center justify-center p-6" style={{ background: "linear-gradient(135deg, #241934, #2E2049 55%, #241934)" }}>
+    <div className="cbs-root min-h-screen flex items-center justify-center p-6" style={{ background: "#FAFAFA" }}>
       <GlobalStyle />
       <div className="w-full max-w-2xl grid md:grid-cols-2 rounded-3xl overflow-hidden" style={{ boxShadow: "0 30px 80px -20px rgba(0,0,0,0.5)" }}>
         <div className="hidden md:flex flex-col justify-between p-8" style={{ background: "linear-gradient(160deg,#2E2049,#1B1226)" }}>
