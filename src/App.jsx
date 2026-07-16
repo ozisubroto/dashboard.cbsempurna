@@ -30,6 +30,8 @@ const DATA_URL = "/data/dashboard-data.json";
    ============================================================ */
 const MONTHS = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 const REGION_ORDER = ["Central","East","West","MT","HO","Online"];
+/* Stacking order bottom -> top specifically for the Dashboard "per Region" chart */
+const REGION_CHART_ORDER = ["Central","HO","MT","Online","East","West"];
 /* Stacking order bottom -> top, also used as the canonical brand order app-wide */
 const BRAND_ORDER = ["Bioaqua","My BestFriend","Nature Dradiance","Kojiesan"];
 const BRAND_COLORS = {
@@ -179,7 +181,7 @@ function computeDashboardSeries(M, f) {
     monthTotals[m] += amt;
   }
 
-  const orderArr = groupBy === "region" ? REGION_ORDER : BRAND_ORDER;
+  const orderArr = groupBy === "region" ? REGION_CHART_ORDER : BRAND_ORDER;
   const presetList = groupBy === "region" ? f.regions : f.brands;
   const activeSeries = presetList && presetList.length ? presetList.slice() : seriesPresent(sums, orderArr);
   activeSeries.sort((a, b) => orderArr.indexOf(a) - orderArr.indexOf(b));
