@@ -45,6 +45,14 @@ const BRAND_LOGOS = {
   "Kojiesan": LOGO_KOJIESAN,
 };
 const TRX_COLORS = { "Selling In": "#7FB4E8", "Selling Out": "#F3A8C6" };
+const REGION_COLORS = {
+  "Central": "#8FD6C9",
+  "East": "#F4C28B",
+  "West": "#9DC3E6",
+  "MT": "#D8A7E0",
+  "HO": "#F2D98B",
+  "Online": "#F3A8C6",
+};
 
 const USERS = {
   admin: { password: "admin123", role: "admin", name: "Admin CBS" },
@@ -146,6 +154,7 @@ function computeDashboardSeries(M, f) {
   for (let m = 0; m < 12; m++) sums[m] = {};
   let total = 0;
   const monthTotals = new Array(12).fill(0);
+  const groupBy = f.groupBy || "brand";
 
   for (let i = 0; i < M.N; i++) {
     if (M.txYear[i] !== f.year) continue;
@@ -162,33 +171,36 @@ function computeDashboardSeries(M, f) {
     const brandLabel = d.brand[RAW.prodMeta.brand[prodIdx]];
     if (!inSet(f.brands, brandLabel)) continue;
 
+    const key = groupBy === "region" ? regionLabel : brandLabel;
     const m = M.txMonth[i];
     const amt = tx.amt[i];
-    sums[m][brandLabel] = (sums[m][brandLabel] || 0) + amt;
+    sums[m][key] = (sums[m][key] || 0) + amt;
     total += amt;
     monthTotals[m] += amt;
   }
 
-  const activeBrands = f.brands && f.brands.length ? f.brands.slice() : brandsPresent(sums);
-  activeBrands.sort((a, b) => BRAND_ORDER.indexOf(a) - BRAND_ORDER.indexOf(b));
+  const orderArr = groupBy === "region" ? REGION_ORDER : BRAND_ORDER;
+  const presetList = groupBy === "region" ? f.regions : f.brands;
+  const activeSeries = presetList && presetList.length ? presetList.slice() : seriesPresent(sums, orderArr);
+  activeSeries.sort((a, b) => orderArr.indexOf(a) - orderArr.indexOf(b));
 
   const chartData = MONTHS.map((label, m) => {
     const row = { month: label };
-    activeBrands.forEach(b => { row[b] = Math.round(sums[m][b] || 0); });
+    activeSeries.forEach(s => { row[s] = Math.round(sums[m][s] || 0); });
     return row;
   });
 
   const activeMonths = monthTotals.filter(v => v > 0).length;
   const avg = activeMonths ? total / activeMonths : 0;
 
-  return { chartData, activeBrands, total, avg, activeMonths };
+  return { chartData, activeBrands: activeSeries, total, avg, activeMonths };
 }
-function brandsPresent(sumsByMonth) {
+function seriesPresent(sumsByMonth, orderArr) {
   const set = new Set();
   Object.values(sumsByMonth).forEach(o => Object.keys(o).forEach(k => set.add(k)));
   const arr = Array.from(set);
-  arr.sort((a, b) => BRAND_ORDER.indexOf(a) - BRAND_ORDER.indexOf(b));
-  return arr.length ? arr : BRAND_ORDER.slice();
+  arr.sort((a, b) => orderArr.indexOf(a) - orderArr.indexOf(b));
+  return arr.length ? arr : orderArr.slice();
 }
 
 /* Total target (SI or SO) for a given year + filter set, used by Dashboard KPI cards */
@@ -820,14 +832,17 @@ function DashboardPage({ M }) {
   const [areas, setAreas] = useState([]);
   const [kotas, setKotas] = useState([]);
   const [brands, setBrands] = useState([]);
+  const [groupBy, setGroupBy] = useState("brand");
 
   const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
-  const si = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
-  const so = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const si = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands, groupBy }), [M, year, months, regions, areas, kotas, brands, groupBy]);
+  const so = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands, groupBy }), [M, year, months, regions, areas, kotas, brands, groupBy]);
   const targetSI = useMemo(() => computeYearTarget(M, { year, months, trx: "Target SI", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
   const targetSO = useMemo(() => computeYearTarget(M, { year, months, trx: "Target SO", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
   const pctSI = targetSI > 0 ? (si.total / targetSI) * 100 : (si.total > 0 ? 100 : 0);
   const pctSO = targetSO > 0 ? (so.total / targetSO) * 100 : (so.total > 0 ? 100 : 0);
+  const colorMap = groupBy === "region" ? REGION_COLORS : BRAND_COLORS;
+  const groupLabel = groupBy === "region" ? "Region" : "Brand";
 
   return (
     <div className="cbs-fadein space-y-5">
@@ -848,15 +863,21 @@ function DashboardPage({ M }) {
         <KPICard icon={Target} label={`Target Selling Out ${year}`} value={formatIDR(targetSO, true)} sub={`% Achievement: ${formatPct(pctSO)}`} accent="#B6A4EA" />
       </div>
 
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="cbs-display text-base" style={{ color: "#241934" }}>Chart Pencapaian</div>
+        <SingleSelect label="Tampilkan per" value={groupBy} onChange={setGroupBy} width={170}
+          options={[{ value: "brand", label: "Brand" }, { value: "region", label: "Region" }]} />
+      </div>
+
       <div className="grid lg:grid-cols-2 gap-5">
-        <ChartCard title="Selling In per Brand" subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={si.chartData} brands={si.activeBrands} />
-        <ChartCard title="Selling Out per Brand" subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={so.chartData} brands={so.activeBrands} />
+        <ChartCard title={`Selling In per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={si.chartData} brands={si.activeBrands} colorMap={colorMap} />
+        <ChartCard title={`Selling Out per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={so.chartData} brands={so.activeBrands} colorMap={colorMap} />
       </div>
     </div>
   );
 }
 
-function ChartCard({ title, subtitle, data, brands }) {
+function ChartCard({ title, subtitle, data, brands, colorMap }) {
   const renderTotalLabel = (props) => {
     const { x, y, width, index } = props;
     const row = data[index];
@@ -880,7 +901,7 @@ function ChartCard({ title, subtitle, data, brands }) {
           <Tooltip formatter={(v, name) => [formatIDR(v), name]} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           {brands.map((b) => (
-            <Bar key={b} dataKey={b} stackId="s" fill={BRAND_COLORS[b] || "#999"}
+            <Bar key={b} dataKey={b} stackId="s" fill={(colorMap && colorMap[b]) || "#999"}
               shape={(p) => <StackSegmentShape {...p} brands={brands} radius={8} />}>
               {b === brands[brands.length - 1] && <LabelList dataKey={b} content={renderTotalLabel} />}
             </Bar>
