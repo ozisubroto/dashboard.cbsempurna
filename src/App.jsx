@@ -151,7 +151,7 @@ function computeDashboardSeries(M, f) {
     if (M.txYear[i] !== f.year) continue;
     const trxLabel = d.trx[tx.trx[i]];
     if (trxLabel !== f.trx) continue;
-    if (f.month !== "ALL" && M.txMonth[i] !== f.month) continue;
+    if (!inSet(f.months, M.txMonth[i])) continue;
     const regionLabel = d.reg[tx.reg[i]];
     if (!inSet(f.regions, regionLabel)) continue;
     const areaLabel = d.area[tx.area[i]];
@@ -200,7 +200,7 @@ function computeYearTarget(M, f) {
     if (M.tgtYear[i] !== f.year) continue;
     const trxLabel = d.trx[tgt.trx[i]];
     if (trxLabel !== f.trx) continue;
-    if (f.month !== "ALL" && M.tgtMonth[i] !== f.month) continue;
+    if (!inSet(f.months, M.tgtMonth[i])) continue;
     const regionLabel = d.reg[tgt.reg[i]];
     if (!inSet(f.regions, regionLabel)) continue;
     const areaLabel = d.area[tgt.area[i]];
@@ -607,22 +607,16 @@ function SingleSelect({ label, options, value, onChange, width }) {
   );
 }
 
-function KPICard({ icon: Icon, label, value, sub, accent, trend }) {
+function KPICard({ icon: Icon, label, value, sub, accent }) {
   return (
-    <div className="cbs-card p-5 flex-1 min-w-[190px]">
-      <div className="flex items-center justify-between mb-3">
-        <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: accent + "20" }}>
-          <Icon size={17} color={accent} />
+    <div className="cbs-card p-4 flex-1 min-w-[190px]">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-xs" style={{ color: "#8A7FA0" }}>{label}</div>
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: accent + "20" }}>
+          <Icon size={14} color={accent} />
         </div>
-        {trend !== undefined && trend !== null && (
-          <span className="flex items-center gap-0.5 text-xs font-semibold" style={{ color: trend >= 0 ? "#2E7873" : "#C0596B" }}>
-            {trend >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-            {Math.abs(trend).toFixed(1)}%
-          </span>
-        )}
       </div>
-      <div className="text-xs mb-1" style={{ color: "#8A7FA0" }}>{label}</div>
-      <div className="cbs-display text-2xl font-semibold" style={{ color: "#241934" }}>{value}</div>
+      <div className="cbs-display text-xl font-semibold" style={{ color: "#241934" }}>{value}</div>
       {sub && <div className="text-xs mt-1" style={{ color: "#8A7FA0" }}>{sub}</div>}
     </div>
   );
@@ -821,17 +815,17 @@ function MobileNav({ page, setPage, user, onLogout }) {
    ============================================================ */
 function DashboardPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
-  const [month, setMonth] = useState("ALL");
+  const [monthsSel, setMonthsSel] = useState([]);
   const [regions, setRegions] = useState([]);
   const [areas, setAreas] = useState([]);
   const [kotas, setKotas] = useState([]);
   const [brands, setBrands] = useState([]);
 
-  const monthNum = month === "ALL" ? "ALL" : parseInt(month, 10);
-  const si = useMemo(() => computeDashboardSeries(M, { year, month: monthNum, trx: "Selling In", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
-  const so = useMemo(() => computeDashboardSeries(M, { year, month: monthNum, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
-  const targetSI = useMemo(() => computeYearTarget(M, { year, month: monthNum, trx: "Target SI", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
-  const targetSO = useMemo(() => computeYearTarget(M, { year, month: monthNum, trx: "Target SO", regions, areas, kotas, brands }), [M, year, monthNum, regions, areas, kotas, brands]);
+  const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
+  const si = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const so = useMemo(() => computeDashboardSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const targetSI = useMemo(() => computeYearTarget(M, { year, months, trx: "Target SI", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const targetSO = useMemo(() => computeYearTarget(M, { year, months, trx: "Target SO", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
   const pctSI = targetSI > 0 ? (si.total / targetSI) * 100 : (si.total > 0 ? 100 : 0);
   const pctSO = targetSO > 0 ? (so.total / targetSO) * 100 : (so.total > 0 ? 100 : 0);
 
@@ -840,8 +834,7 @@ function DashboardPage({ M }) {
       <div className="flex flex-wrap items-center gap-2">
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={110}
           options={M.years.map(y => ({ value: y, label: y }))} />
-        <SingleSelect label="Bulan" value={month} onChange={setMonth} width={130}
-          options={[{ value: "ALL", label: "Semua Bulan" }, ...MONTHS.map((m, i) => ({ value: String(i), label: m }))]} />
+        <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
         <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
         <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
@@ -850,9 +843,9 @@ function DashboardPage({ M }) {
 
       <div className="flex flex-wrap gap-4">
         <KPICard icon={ArrowUpRight} label={`Total Selling In ${year}`} value={formatIDR(si.total, true)} sub={`Rata-rata/bulan aktif: ${formatIDR(si.avg, true)}`} accent="#7FB4E8" />
+        <KPICard icon={Target} label={`Target Selling In ${year}`} value={formatIDR(targetSI, true)} sub={`% Achievement: ${formatPct(pctSI)}`} accent="#8FD6AC" />
         <KPICard icon={ArrowDownRight} label={`Total Selling Out ${year}`} value={formatIDR(so.total, true)} sub={`Rata-rata/bulan aktif: ${formatIDR(so.avg, true)}`} accent="#F3A8C6" />
-        <KPICard icon={Target} label={`Target SI ${year}`} value={formatIDR(targetSI, true)} sub={`% Achievement: ${formatPct(pctSI)}`} accent="#8FD6AC" />
-        <KPICard icon={Target} label={`Target SO ${year}`} value={formatIDR(targetSO, true)} sub={`% Achievement: ${formatPct(pctSO)}`} accent="#B6A4EA" />
+        <KPICard icon={Target} label={`Target Selling Out ${year}`} value={formatIDR(targetSO, true)} sub={`% Achievement: ${formatPct(pctSO)}`} accent="#B6A4EA" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
@@ -863,25 +856,25 @@ function DashboardPage({ M }) {
   );
 }
 
-function TotalLabel({ x, y, width, payload, brands }) {
-  if (!payload) return null;
-  const total = brands.reduce((s, b) => s + (payload[b] || 0), 0);
-  if (!total) return null;
-  return (
-    <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#241934">
-      {formatIDR(total, true)}
-    </text>
-  );
-}
-
 function ChartCard({ title, subtitle, data, brands }) {
+  const renderTotalLabel = (props) => {
+    const { x, y, width, index } = props;
+    const row = data[index];
+    if (!row) return null;
+    const total = brands.reduce((s, b) => s + (row[b] || 0), 0);
+    if (!total) return null;
+    return (
+      <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#241934">
+        {formatIDR(total, true)}
+      </text>
+    );
+  };
   return (
     <div className="cbs-card p-5">
       <div className="mb-1 cbs-display text-lg" style={{ color: "#241934" }}>{title}</div>
       <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
       <ResponsiveContainer width="100%" height={300}>
-        <BarChart data={data} margin={{ top: 22, right: 4, left: 0, bottom: 0 }} barCategoryGap="35%">
-          <CartesianGrid vertical={false} stroke="#EDE7F5" />
+        <BarChart data={data} margin={{ top: 26, right: 4, left: 0, bottom: 0 }} barCategoryGap="35%">
           <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
           <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
           <Tooltip formatter={(v, name) => [formatIDR(v), name]} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
@@ -889,7 +882,7 @@ function ChartCard({ title, subtitle, data, brands }) {
           {brands.map((b) => (
             <Bar key={b} dataKey={b} stackId="s" fill={BRAND_COLORS[b] || "#999"}
               shape={(p) => <StackSegmentShape {...p} brands={brands} radius={8} />}>
-              {b === brands[brands.length - 1] && <LabelList dataKey={b} content={(p) => <TotalLabel {...p} brands={brands} />} />}
+              {b === brands[brands.length - 1] && <LabelList dataKey={b} content={renderTotalLabel} />}
             </Bar>
           ))}
         </BarChart>
