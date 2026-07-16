@@ -864,8 +864,8 @@ function ChartCard({ title, subtitle, data, brands }) {
     const total = brands.reduce((s, b) => s + (row[b] || 0), 0);
     if (!total) return null;
     return (
-      <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={10.5} fontWeight={700} fill="#241934">
-        {formatIDR(total, true)}
+      <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={10.5} fontWeight={400} fill="#241934">
+        {formatValue(total, true)}
       </text>
     );
   };
