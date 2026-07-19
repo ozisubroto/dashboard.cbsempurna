@@ -952,67 +952,77 @@ function ChartCard({ title, subtitle, data, brands, colorMap }) {
 
 const DASHBOARD_REGIONS = ["Central", "East", "West", "MT"];
 
-function MiniDonutCard({ title, data, colorMap }) {
-  const total = data.reduce((s, e) => s + e.value, 0);
-  const top = data.slice().sort((a, b) => b.value - a.value)[0];
+function DonutMini({ title, data, colorMap }) {
+  const sorted = data.slice().sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((s, e) => s + e.value, 0);
+  const top = sorted[0];
   return (
-    <div className="cbs-card p-3.5">
+    <div>
       <div className="text-xs font-semibold mb-1 truncate" style={{ color: "#241934" }} title={title}>{title}</div>
       {total > 0 ? (
         <>
           <div style={{ position: "relative" }}>
-            <ResponsiveContainer width="100%" height={110}>
+            <ResponsiveContainer width="100%" height={130}>
               <PieChart>
-                <Pie data={data} dataKey="value" nameKey="name" innerRadius={30} outerRadius={46}
-                  paddingAngle={4} cornerRadius={6} startAngle={90} endAngle={-270} stroke="none">
-                  {data.map((e) => <Cell key={e.name} fill={(colorMap && colorMap[e.name]) || "#ccc"} />)}
+                <Pie data={sorted} dataKey="value" nameKey="name" innerRadius={38} outerRadius={58}
+                  paddingAngle={4} cornerRadius={7} startAngle={90} endAngle={-270} stroke="none">
+                  {sorted.map((e) => <Cell key={e.name} fill={(colorMap && colorMap[e.name]) || "#ccc"} />)}
                 </Pie>
                 <Tooltip formatter={(v, n) => [formatValue(v, true), n]} contentStyle={{ borderRadius: 10, border: "1px solid #EDE7F5", fontSize: 11 }} />
               </PieChart>
             </ResponsiveContainer>
             <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
-              <div className="cbs-display" style={{ fontSize: 13, fontWeight: 700, color: "#241934" }}>{total ? Math.round((top.value / total) * 100) : 0}%</div>
+              <div className="cbs-display" style={{ fontSize: 15, fontWeight: 700, color: "#241934" }}>{total ? Math.round((top.value / total) * 100) : 0}%</div>
             </div>
           </div>
-          <div className="space-y-0.5 mt-1">
-            {data.slice(0, 3).map(e => (
+          <div className="space-y-1 mt-1">
+            {sorted.slice(0, 4).map(e => (
               <div key={e.name} className="flex items-center justify-between text-[10px]" style={{ color: "#6E6480" }}>
-                <span className="flex items-center gap-1 truncate" style={{ maxWidth: 90 }}>
+                <span className="flex items-center gap-1 truncate" style={{ maxWidth: 80 }}>
                   <span className="rounded-full inline-block shrink-0" style={{ width: 6, height: 6, background: (colorMap && colorMap[e.name]) || "#ccc" }} />
                   {e.name}
                 </span>
-                <span className="font-medium tabular-nums">{total ? ((e.value / total) * 100).toFixed(0) : 0}%</span>
+                <span className="font-medium tabular-nums shrink-0 ml-1">{formatValue(e.value, true)} · {total ? ((e.value / total) * 100).toFixed(0) : 0}%</span>
               </div>
             ))}
           </div>
         </>
       ) : (
-        <div className="flex items-center justify-center" style={{ height: 110, color: "#D8D0E8", fontSize: 11 }}>Tidak ada data</div>
+        <div className="flex items-center justify-center" style={{ height: 130, color: "#D8D0E8", fontSize: 11 }}>Tidak ada data</div>
       )}
     </div>
   );
 }
 
 function ContributionSection({ title, matrix }) {
-  const brandCards = BRAND_ORDER.map(brand => ({
+  const brandItems = BRAND_ORDER.map(brand => ({
     key: brand,
     title: brand,
-    data: REGION_ORDER.map(r => ({ name: r, value: (matrix[brand] && matrix[brand][r]) || 0 }))
-      .filter(e => e.value > 0),
+    total: REGION_ORDER.reduce((s, r) => s + ((matrix[brand] && matrix[brand][r]) || 0), 0),
+    data: REGION_ORDER.map(r => ({ name: r, value: (matrix[brand] && matrix[brand][r]) || 0 })).filter(e => e.value > 0),
     colorMap: REGION_COLORS,
-  }));
-  const regionCards = DASHBOARD_REGIONS.map(region => ({
+  })).sort((a, b) => b.total - a.total);
+  const regionItems = DASHBOARD_REGIONS.map(region => ({
     key: region,
     title: region,
+    total: BRAND_ORDER.reduce((s, b) => s + ((matrix[b] && matrix[b][region]) || 0), 0),
     data: BRAND_ORDER.map(b => ({ name: b, value: (matrix[b] && matrix[b][region]) || 0 })).filter(e => e.value > 0),
     colorMap: BRAND_COLORS,
-  }));
+  })).sort((a, b) => b.total - a.total);
+
   return (
-    <div className="mt-4">
-      <div className="text-xs font-semibold mb-2" style={{ color: "#8A7FA0" }}>{title}</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {brandCards.map(c => <MiniDonutCard key={c.key} title={`${c.title} → Region`} data={c.data} colorMap={c.colorMap} />)}
-        {regionCards.map(c => <MiniDonutCard key={c.key} title={`${c.title} → Brand`} data={c.data} colorMap={c.colorMap} />)}
+    <div className="grid sm:grid-cols-2 gap-4 mt-4">
+      <div className="cbs-card p-4">
+        <div className="text-sm font-semibold mb-3" style={{ color: "#241934" }}>{title} — Brand</div>
+        <div className="grid grid-cols-2 gap-4">
+          {brandItems.map(c => <DonutMini key={c.key} title={c.title} data={c.data} colorMap={c.colorMap} />)}
+        </div>
+      </div>
+      <div className="cbs-card p-4">
+        <div className="text-sm font-semibold mb-3" style={{ color: "#241934" }}>{title} — Region</div>
+        <div className="grid grid-cols-2 gap-4">
+          {regionItems.map(c => <DonutMini key={c.key} title={c.title} data={c.data} colorMap={c.colorMap} />)}
+        </div>
       </div>
     </div>
   );
