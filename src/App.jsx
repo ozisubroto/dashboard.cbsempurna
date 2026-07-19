@@ -1300,7 +1300,14 @@ function UploadPage({ onDataLoaded, dataMeta }) {
         const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
         const sheetName = wb.SheetNames.includes("Data") ? "Data" : wb.SheetNames[0];
         const ws = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        const rawRows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        const rows = rawRows.map(row => {
+          const cleaned = {};
+          for (const key in row) {
+            cleaned[key.trim()] = row[key];
+          }
+          return cleaned;
+        });
         if (!rows.length) throw new Error("File tidak berisi baris data.");
         const newRaw = buildRawFromRows(rows);
         if (newRaw.tx.ym.length === 0 && newRaw.tgt.ym.length === 0) throw new Error("Tidak ditemukan baris dengan Kategori Trx yang valid.");
