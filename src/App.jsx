@@ -468,7 +468,7 @@ function buildRawFromRows(rows) {
 
     if (trx === "Selling In" || trx === "Selling Out") {
       const produk = canon(r["Nama Produk"]) || "-";
-      const kategori = canon(r["Kategori"]) || "-";
+      const kategori = canon(r["Kategori"] ?? r["Kategori Produk"]) || "-";
       const qty = Number(r["Qty"]) || 0;
       if (!prodMetaTmp.has(produk)) prodMetaTmp.set(produk, { brand, kat: kategori });
       const key = [ym, trx, region, kota, area, produk].join("~");
