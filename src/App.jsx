@@ -1357,9 +1357,19 @@ function UploadPage({ onDataLoaded, dataMeta }) {
 /* ============================================================
    ROOT APP
    ============================================================ */
+const SESSION_KEY = "cbs_session";
+const PAGE_KEY = "cbs_last_page";
+
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [page, setPage] = useState("dashboard");
+  const [user, setUser] = useState(() => {
+    try {
+      const savedRaw = localStorage.getItem(SESSION_KEY);
+      return savedRaw ? JSON.parse(savedRaw) : null;
+    } catch { return null; }
+  });
+  const [page, setPage] = useState(() => {
+    try { return localStorage.getItem(PAGE_KEY) || "dashboard"; } catch { return "dashboard"; }
+  });
   const [raw, setRaw] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1372,6 +1382,20 @@ export default function App() {
       })
       .then((json) => setRaw(json))
       .catch((err) => setLoadError(err.message));
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(PAGE_KEY, page); } catch {}
+  }, [page]);
+
+  const handleLogin = useCallback((u) => {
+    setUser(u);
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {}
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setUser(null);
+    try { localStorage.removeItem(SESSION_KEY); } catch {}
   }, []);
 
   const M = useMemo(() => (raw ? buildModel(raw) : null), [raw]);
@@ -1406,15 +1430,15 @@ export default function App() {
     );
   }
 
-  if (!user) return <LoginScreen onLogin={setUser} />;
+  if (!user) return <LoginScreen onLogin={handleLogin} />;
 
   return (
     <div className="cbs-root min-h-screen flex">
       <GlobalStyle />
-      <Sidebar page={page} setPage={setPage} user={user} onLogout={() => setUser(null)} dataMeta={dataMeta}
+      <Sidebar page={page} setPage={setPage} user={user} onLogout={handleLogout} dataMeta={dataMeta}
         collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
       <div className="flex-1 min-w-0 flex flex-col">
-        <MobileNav page={page} setPage={setPage} user={user} onLogout={() => setUser(null)} />
+        <MobileNav page={page} setPage={setPage} user={user} onLogout={handleLogout} />
         <div className="px-4 md:px-8 py-3 flex items-center justify-between border-b" style={{ borderColor: "#EDE7F5", background: "#fff" }}>
           <div>
             <div className="cbs-display text-lg" style={{ color: "#241934" }}>
