@@ -207,6 +207,32 @@ function seriesPresent(sumsByMonth, orderArr) {
   return arr.length ? arr : orderArr.slice();
 }
 
+/* Brand x Region matrix of summed amounts, used by the Dashboard contribution donut cards */
+function computeBrandRegionMatrix(M, f) {
+  const { RAW, d } = M;
+  const tx = RAW.tx;
+  const matrix = {};
+  BRAND_ORDER.forEach(b => { matrix[b] = {}; REGION_ORDER.forEach(r => { matrix[b][r] = 0; }); });
+
+  for (let i = 0; i < M.N; i++) {
+    if (M.txYear[i] !== f.year) continue;
+    const trxLabel = d.trx[tx.trx[i]];
+    if (trxLabel !== f.trx) continue;
+    if (!inSet(f.months, M.txMonth[i])) continue;
+    const areaLabel = d.area[tx.area[i]];
+    if (!inSet(f.areas, areaLabel)) continue;
+    const kotaLabel = d.kota[tx.kota[i]];
+    if (!inSet(f.kotas, kotaLabel)) continue;
+    const regionLabel = d.reg[tx.reg[i]];
+    const prodIdx = tx.prod[i];
+    const brandLabel = d.brand[RAW.prodMeta.brand[prodIdx]];
+    if (!matrix[brandLabel]) { matrix[brandLabel] = {}; REGION_ORDER.forEach(r => { matrix[brandLabel][r] = 0; }); }
+    if (matrix[brandLabel][regionLabel] === undefined) matrix[brandLabel][regionLabel] = 0;
+    matrix[brandLabel][regionLabel] += tx.amt[i];
+  }
+  return matrix;
+}
+
 /* Total target (SI or SO) for a given year + filter set, used by Dashboard KPI cards */
 function computeYearTarget(M, f) {
   const { RAW, d } = M;
@@ -847,6 +873,8 @@ function DashboardPage({ M }) {
   const pctSO = targetSO > 0 ? (so.total / targetSO) * 100 : (so.total > 0 ? 100 : 0);
   const colorMap = groupBy === "region" ? REGION_COLORS : BRAND_COLORS;
   const groupLabel = groupBy === "region" ? "Region" : "Brand";
+  const matrixSI = useMemo(() => computeBrandRegionMatrix(M, { year, months, trx: "Selling In", areas, kotas }), [M, year, months, areas, kotas]);
+  const matrixSO = useMemo(() => computeBrandRegionMatrix(M, { year, months, trx: "Selling Out", areas, kotas }), [M, year, months, areas, kotas]);
 
   return (
     <div className="cbs-fadein space-y-5">
@@ -874,8 +902,14 @@ function DashboardPage({ M }) {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
-        <ChartCard title={`Selling In per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={si.chartData} brands={si.activeBrands} colorMap={colorMap} />
-        <ChartCard title={`Selling Out per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={so.chartData} brands={so.activeBrands} colorMap={colorMap} />
+        <div>
+          <ChartCard title={`Selling In per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={si.chartData} brands={si.activeBrands} colorMap={colorMap} />
+          <ContributionSection title="Kontribusi Selling In" matrix={matrixSI} />
+        </div>
+        <div>
+          <ChartCard title={`Selling Out per ${groupLabel}`} subtitle={`Pencapaian nasional ${year}, Jan–Des`} data={so.chartData} brands={so.activeBrands} colorMap={colorMap} />
+          <ContributionSection title="Kontribusi Selling Out" matrix={matrixSO} />
+        </div>
       </div>
     </div>
   );
@@ -912,6 +946,74 @@ function ChartCard({ title, subtitle, data, brands, colorMap }) {
           ))}
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+const DASHBOARD_REGIONS = ["Central", "East", "West", "MT"];
+
+function MiniDonutCard({ title, data, colorMap }) {
+  const total = data.reduce((s, e) => s + e.value, 0);
+  const top = data.slice().sort((a, b) => b.value - a.value)[0];
+  return (
+    <div className="cbs-card p-3.5">
+      <div className="text-xs font-semibold mb-1 truncate" style={{ color: "#241934" }} title={title}>{title}</div>
+      {total > 0 ? (
+        <>
+          <div style={{ position: "relative" }}>
+            <ResponsiveContainer width="100%" height={110}>
+              <PieChart>
+                <Pie data={data} dataKey="value" nameKey="name" innerRadius={30} outerRadius={46}
+                  paddingAngle={4} cornerRadius={6} startAngle={90} endAngle={-270} stroke="none">
+                  {data.map((e) => <Cell key={e.name} fill={(colorMap && colorMap[e.name]) || "#ccc"} />)}
+                </Pie>
+                <Tooltip formatter={(v, n) => [formatValue(v, true), n]} contentStyle={{ borderRadius: 10, border: "1px solid #EDE7F5", fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
+              <div className="cbs-display" style={{ fontSize: 13, fontWeight: 700, color: "#241934" }}>{total ? Math.round((top.value / total) * 100) : 0}%</div>
+            </div>
+          </div>
+          <div className="space-y-0.5 mt-1">
+            {data.slice(0, 3).map(e => (
+              <div key={e.name} className="flex items-center justify-between text-[10px]" style={{ color: "#6E6480" }}>
+                <span className="flex items-center gap-1 truncate" style={{ maxWidth: 90 }}>
+                  <span className="rounded-full inline-block shrink-0" style={{ width: 6, height: 6, background: (colorMap && colorMap[e.name]) || "#ccc" }} />
+                  {e.name}
+                </span>
+                <span className="font-medium tabular-nums">{total ? ((e.value / total) * 100).toFixed(0) : 0}%</span>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="flex items-center justify-center" style={{ height: 110, color: "#D8D0E8", fontSize: 11 }}>Tidak ada data</div>
+      )}
+    </div>
+  );
+}
+
+function ContributionSection({ title, matrix }) {
+  const brandCards = BRAND_ORDER.map(brand => ({
+    key: brand,
+    title: brand,
+    data: REGION_ORDER.map(r => ({ name: r, value: (matrix[brand] && matrix[brand][r]) || 0 }))
+      .filter(e => e.value > 0),
+    colorMap: REGION_COLORS,
+  }));
+  const regionCards = DASHBOARD_REGIONS.map(region => ({
+    key: region,
+    title: region,
+    data: BRAND_ORDER.map(b => ({ name: b, value: (matrix[b] && matrix[b][region]) || 0 })).filter(e => e.value > 0),
+    colorMap: BRAND_COLORS,
+  }));
+  return (
+    <div className="mt-4">
+      <div className="text-xs font-semibold mb-2" style={{ color: "#8A7FA0" }}>{title}</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {brandCards.map(c => <MiniDonutCard key={c.key} title={`${c.title} → Region`} data={c.data} colorMap={c.colorMap} />)}
+        {regionCards.map(c => <MiniDonutCard key={c.key} title={`${c.title} → Brand`} data={c.data} colorMap={c.colorMap} />)}
+      </div>
     </div>
   );
 }
