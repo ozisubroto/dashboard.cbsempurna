@@ -7,7 +7,7 @@ import {
   LayoutDashboard, MapPin, Package, Target, Sparkles, UploadCloud,
   LogOut, Lock, User, ChevronDown, ChevronLeft, ChevronRight, X, Search, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Building2, Globe2, CheckCircle2, AlertCircle,
-  ArrowUpDown
+  ArrowUpDown, ChevronUp
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -919,30 +919,53 @@ function ChartCard({ title, subtitle, data, brands, colorMap }) {
 /* ============================================================
    PAGE: PERFORMANCE KOTA
    ============================================================ */
-const SORT_OPTIONS_NAME_VALUE = [
-  { value: "value_desc", label: "Pencapaian: Tertinggi" },
-  { value: "value_asc", label: "Pencapaian: Terendah" },
-  { value: "name_asc", label: "Nama: A → Z" },
-  { value: "name_desc", label: "Nama: Z → A" },
-];
+function SortableTh({ label, sortKey, activeKey, activeDir, onSort, className, style }) {
+  const isActive = activeKey === sortKey;
+  function handleClick() {
+    if (!isActive) onSort(sortKey, sortKey === "name" ? "asc" : "desc");
+    else onSort(sortKey, activeDir === "asc" ? "desc" : "asc");
+  }
+  return (
+    <th onClick={handleClick} className={"cursor-pointer select-none " + (className || "")} style={style} title="Klik untuk urutkan">
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {isActive && (activeDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+      </span>
+    </th>
+  );
+}
 
 function KotaPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
   const [trx, setTrx] = useState("Selling Out");
   const [regions, setRegions] = useState([]);
   const [brands, setBrands] = useState([]);
-  const [sortMode, setSortMode] = useState("value_desc");
+  const [sortKey, setSortKey] = useState("value");
+  const [sortDir, setSortDir] = useState("desc");
   const rows = useMemo(() => computeKotaPerformance(M, { year, trx, regions, brands }), [M, year, trx, regions, brands]);
   const grandTotal = rows.reduce((a, r) => a + r.total, 0);
 
+  function handleSort(key, dir) { setSortKey(key); setSortDir(dir); }
+
   const sortedRows = useMemo(() => {
     const arr = rows.slice();
-    if (sortMode === "value_desc") arr.sort((a, b) => b.total - a.total);
-    else if (sortMode === "value_asc") arr.sort((a, b) => a.total - b.total);
-    else if (sortMode === "name_asc") arr.sort((a, b) => a.kota.localeCompare(b.kota));
-    else if (sortMode === "name_desc") arr.sort((a, b) => b.kota.localeCompare(a.kota));
+    arr.sort((a, b) => {
+      if (sortKey === "name") {
+        const cmp = a.kota.localeCompare(b.kota);
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      let va, vb;
+      if (sortKey === "value") { va = a.total; vb = b.total; }
+      else if (sortKey === "avg") { va = a.avg; vb = b.avg; }
+      else if (sortKey === "contribution") { va = a.contribution; vb = b.contribution; }
+      else if (sortKey.startsWith("month_")) {
+        const idx = parseInt(sortKey.slice(6), 10);
+        va = a.months[idx]; vb = b.months[idx];
+      } else { va = 0; vb = 0; }
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
     return arr;
-  }, [rows, sortMode]);
+  }, [rows, sortKey, sortDir]);
 
   const footer = useMemo(() => {
     const months = new Array(12).fill(0);
@@ -960,7 +983,6 @@ function KotaPage({ M }) {
           options={[{ value: "Selling Out", label: "Selling Out" }, { value: "Selling In", label: "Selling In" }]} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={160} />
-        <SingleSelect label="Urutkan" value={sortMode} onChange={setSortMode} width={190} options={SORT_OPTIONS_NAME_VALUE} />
         <div className="ml-auto text-sm" style={{ color: "#6E6480" }}>
           Total {trx} {year}: <b className="cbs-display">{formatValue(grandTotal, true)}</b>
         </div>
@@ -971,11 +993,18 @@ function KotaPage({ M }) {
             <thead>
               <tr style={{ color: "#8A7FA0" }}>
                 <th className="cbs-sticky-corner text-center px-2 py-2 font-medium" style={{ background: "#F7F5FA", width: 40 }}>No.</th>
-                <th className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }}>Kota</th>
-                {MONTHS.map(m => <th key={m} className="text-right px-1.5 py-2 font-medium">{m}</th>)}
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Total</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Avg</th>
-                <th className="text-right px-3 py-2 font-medium" style={{ color: "#241934" }}>Kontribusi</th>
+                <SortableTh label="Kota" sortKey="name" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }} />
+                {MONTHS.map((m, mi) => (
+                  <SortableTh key={m} label={m} sortKey={"month_" + mi} activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                    className="text-right px-1.5 py-2 font-medium" />
+                ))}
+                <SortableTh label="Total" sortKey="value" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Avg" sortKey="avg" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Kontribusi" sortKey="contribution" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-3 py-2 font-medium" style={{ color: "#241934" }} />
               </tr>
             </thead>
             <tbody>
@@ -1025,12 +1054,15 @@ function ProdukPage({ M }) {
   const [kategoris, setKategoris] = useState([]);
   const [brands, setBrands] = useState([]);
   const [metric, setMetric] = useState("amt");
-  const [sortMode, setSortMode] = useState("value_desc");
+  const [sortKey, setSortKey] = useState("value");
+  const [sortDir, setSortDir] = useState("desc");
   const [search, setSearch] = useState("");
 
   const rows = useMemo(() => computeProdukPerformance(M, { year, trx, regions, kotas, areas, kategoris, brands }),
     [M, year, trx, regions, kotas, areas, kategoris, brands]);
   const grandTotal = rows.reduce((a, r) => a + (metric === "amt" ? r.totalAmt : r.totalQty), 0);
+
+  function handleSort(key, dir) { setSortKey(key); setSortDir(dir); }
 
   const visibleRows = useMemo(() => {
     let arr = rows;
@@ -1039,12 +1071,24 @@ function ProdukPage({ M }) {
       arr = arr.filter(r => r.produk.toLowerCase().includes(q));
     }
     arr = arr.slice();
-    if (sortMode === "value_desc") arr.sort((a, b) => (metric === "amt" ? b.totalAmt - a.totalAmt : b.totalQty - a.totalQty));
-    else if (sortMode === "value_asc") arr.sort((a, b) => (metric === "amt" ? a.totalAmt - b.totalAmt : a.totalQty - b.totalQty));
-    else if (sortMode === "name_asc") arr.sort((a, b) => a.produk.localeCompare(b.produk));
-    else if (sortMode === "name_desc") arr.sort((a, b) => b.produk.localeCompare(a.produk));
+    arr.sort((a, b) => {
+      if (sortKey === "name") {
+        const cmp = a.produk.localeCompare(b.produk);
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      let va, vb;
+      if (sortKey === "value") { va = metric === "amt" ? a.totalAmt : a.totalQty; vb = metric === "amt" ? b.totalAmt : b.totalQty; }
+      else if (sortKey === "avg") { va = metric === "amt" ? a.avgAmt : a.avgQty; vb = metric === "amt" ? b.avgAmt : b.avgQty; }
+      else if (sortKey === "contribution") { va = metric === "amt" ? a.contributionAmt : a.contributionQty; vb = metric === "amt" ? b.contributionAmt : b.contributionQty; }
+      else if (sortKey.startsWith("month_")) {
+        const idx = parseInt(sortKey.slice(6), 10);
+        va = metric === "amt" ? a.amtM[idx] : a.qtyM[idx];
+        vb = metric === "amt" ? b.amtM[idx] : b.qtyM[idx];
+      } else { va = 0; vb = 0; }
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
     return arr;
-  }, [rows, search, sortMode, metric]);
+  }, [rows, search, sortKey, sortDir, metric]);
 
   return (
     <div className="cbs-fadein space-y-4">
@@ -1059,7 +1103,6 @@ function ProdukPage({ M }) {
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={155} />
         <SingleSelect label="Metrik" value={metric} onChange={setMetric} width={100}
           options={[{ value: "amt", label: "Value" }, { value: "qty", label: "Qty" }]} />
-        <SingleSelect label="Urutkan" value={sortMode} onChange={setSortMode} width={180} options={SORT_OPTIONS_NAME_VALUE} />
         <div className="relative" style={{ width: 200 }}>
           <Search size={14} color="#8A7FA0" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama produk..."
@@ -1075,11 +1118,18 @@ function ProdukPage({ M }) {
             <thead>
               <tr style={{ color: "#8A7FA0" }}>
                 <th className="cbs-sticky-corner text-center px-2 py-2 font-medium" style={{ background: "#F7F5FA", width: 40 }}>No.</th>
-                <th className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }}>Produk</th>
-                {MONTHS.map(m => <th key={m} className="text-right px-1.5 py-2 font-medium">{m}</th>)}
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Total</th>
-                <th className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }}>Avg</th>
-                <th className="text-right px-3 py-2 font-medium" style={{ color: "#241934" }}>Kontribusi</th>
+                <SortableTh label="Produk" sortKey="name" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3 }} />
+                {MONTHS.map((m, mi) => (
+                  <SortableTh key={m} label={m} sortKey={"month_" + mi} activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                    className="text-right px-1.5 py-2 font-medium" />
+                ))}
+                <SortableTh label="Total" sortKey="value" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Avg" sortKey="avg" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Kontribusi" sortKey="contribution" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="text-right px-3 py-2 font-medium" style={{ color: "#241934" }} />
               </tr>
             </thead>
             <tbody>
