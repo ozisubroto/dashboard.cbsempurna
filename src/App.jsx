@@ -1418,7 +1418,7 @@ export default function App() {
     };
   }, [M, raw]);
 
-  const handleDataLoaded = useCallback((newRaw) => { setRaw(newRaw); setPage("dashboard"); }, []);
+  const handleDataLoaded = useCallback((newRaw) => { setRaw(newRaw); }, []);
 
   if (loadError) {
     return (
