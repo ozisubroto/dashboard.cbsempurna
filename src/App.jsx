@@ -1297,10 +1297,10 @@ function UploadPage({ onDataLoaded, dataMeta }) {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
+        const wb = XLSX.read(e.target.result, { type: "array", cellDates: false });
         const sheetName = wb.SheetNames.includes("Data") ? "Data" : wb.SheetNames[0];
         const ws = wb.Sheets[sheetName];
-        const rawRows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        const rawRows = XLSX.utils.sheet_to_json(ws, { defval: null, raw: true });
         const rows = rawRows.map(row => {
           const cleaned = {};
           for (const key in row) {
