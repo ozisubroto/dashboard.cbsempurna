@@ -955,7 +955,6 @@ const DASHBOARD_REGIONS = ["Central", "East", "West", "MT"];
 function DonutMini({ title, data, colorMap }) {
   const sorted = data.slice().sort((a, b) => b.value - a.value);
   const total = sorted.reduce((s, e) => s + e.value, 0);
-  const top = sorted[0];
   return (
     <div>
       <div className="text-xs font-semibold mb-1 truncate" style={{ color: "#241934" }} title={title}>{title}</div>
@@ -971,8 +970,8 @@ function DonutMini({ title, data, colorMap }) {
                 <Tooltip formatter={(v, n) => [formatValue(v, true), n]} contentStyle={{ borderRadius: 10, border: "1px solid #EDE7F5", fontSize: 11 }} />
               </PieChart>
             </ResponsiveContainer>
-            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
-              <div className="cbs-display" style={{ fontSize: 15, fontWeight: 700, color: "#241934" }}>{total ? Math.round((top.value / total) * 100) : 0}%</div>
+            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none", width: 66 }}>
+              <div className="cbs-display" style={{ fontSize: 11, fontWeight: 400, color: "#241934", lineHeight: 1.15 }}>{formatValue(total, true)}</div>
             </div>
           </div>
           <div className="space-y-1 mt-1">
