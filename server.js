@@ -41,6 +41,7 @@ ensureDataFile();
 app.get("/api/data", (req, res) => {
   try {
     const raw = fs.readFileSync(DATA_FILE, "utf-8");
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
     res.type("application/json").send(raw);
   } catch (err) {
     res.status(500).json({ error: "Gagal membaca data: " + err.message });
@@ -50,20 +51,26 @@ app.get("/api/data", (req, res) => {
 app.post("/api/data", (req, res) => {
   const token = req.headers["x-upload-token"];
   if (!UPLOAD_TOKEN || token !== UPLOAD_TOKEN) {
+    console.log("[upload] REJECTED: invalid token");
     return res.status(401).json({ error: "Token upload tidak valid." });
   }
   const body = req.body;
   if (!body || !body.dicts || !body.tx || !body.tgt) {
+    console.log("[upload] REJECTED: invalid structure", body ? Object.keys(body) : body);
     return res.status(400).json({ error: "Struktur data tidak sesuai." });
   }
   try {
+    const years = body.dicts.ym || [];
+    console.log(`[upload] Saving new data: tx=${(body.tx.ym||[]).length} rows, tgt=${(body.tgt.ym||[]).length} rows, periods=${years[0]}..${years[years.length-1]} (${years.length} total)`);
     fs.writeFileSync(DATA_FILE, JSON.stringify(body));
+    console.log("[upload] Saved successfully to", DATA_FILE);
     res.json({
       ok: true,
       txCount: (body.tx.ym || []).length,
       tgtCount: (body.tgt.ym || []).length,
     });
   } catch (err) {
+    console.log("[upload] ERROR while saving:", err.message);
     res.status(500).json({ error: "Gagal menyimpan data: " + err.message });
   }
 });
