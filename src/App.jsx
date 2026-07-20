@@ -7,7 +7,7 @@ import {
   LayoutDashboard, MapPin, Package, Target, Sparkles, UploadCloud,
   LogOut, Lock, User, ChevronDown, ChevronLeft, ChevronRight, X, Search, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Building2, Globe2, CheckCircle2, AlertCircle,
-  ArrowUpDown, ChevronUp
+  ArrowUpDown, ChevronUp, Download, FileText
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -770,6 +770,7 @@ const NAV_ITEMS = [
   { id: "produk", label: "Performance Produk", icon: Package },
   { id: "target", label: "Sales Growth", icon: TrendingUp },
   { id: "insight", label: "Insight", icon: Sparkles },
+  { id: "reporting", label: "Reporting", icon: FileText },
 ];
 
 function Sidebar({ page, setPage, user, onLogout, dataMeta, collapsed, onToggleCollapse }) {
@@ -1454,6 +1455,306 @@ function BarRow({ rank, label, value, max, color, fmt, contribPct }) {
 }
 
 /* ============================================================
+   PAGE: REPORTING (PPTX export)
+   ============================================================ */
+function hexNoHash(c) { return (c || "999999").replace("#", ""); }
+
+function makeGradientDataUrl(stops, w, h) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  stops.forEach(([pos, color]) => grad.addColorStop(pos, color));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  return canvas.toDataURL("image/png");
+}
+
+function buildInsightBullets({ si, so, targetSI, targetSO, growthSI, growthSO, ins, monthLabel }) {
+  const bullets = [];
+  const pctSI = targetSI > 0 ? (si.total / targetSI) * 100 : 0;
+  const pctSO = targetSO > 0 ? (so.total / targetSO) * 100 : 0;
+
+  bullets.push(
+    `Pencapaian Selling In periode ${monthLabel} sebesar ${formatIDR(si.total, true)} (${pctSI.toFixed(1)}% dari target), tumbuh ${growthSI.growthPct >= 0 ? "+" : ""}${growthSI.growthPct.toFixed(1)}% dibanding periode yang sama tahun ${growthSI.prevYear}.`
+  );
+  bullets.push(
+    `Pencapaian Selling Out periode ${monthLabel} sebesar ${formatIDR(so.total, true)} (${pctSO.toFixed(1)}% dari target), tumbuh ${growthSO.growthPct >= 0 ? "+" : ""}${growthSO.growthPct.toFixed(1)}% dibanding periode yang sama tahun ${growthSO.prevYear}.`
+  );
+
+  if (si.activeBrands && si.activeBrands.length) {
+    const brandTotals = si.activeBrands.map(b => ({ name: b, value: si.chartData.reduce((s, r) => s + (r[b] || 0), 0) }));
+    brandTotals.sort((a, b) => b.value - a.value);
+    if (brandTotals[0] && brandTotals[0].value > 0) {
+      const share = si.total > 0 ? (brandTotals[0].value / si.total) * 100 : 0;
+      bullets.push(`Brand dengan kontribusi Selling In terbesar: ${brandTotals[0].name} (${share.toFixed(1)}% dari total).`);
+    }
+  }
+  if (ins.topKotaSO && ins.topKotaSO[0]) {
+    bullets.push(`Kota dengan kontribusi Selling Out tertinggi: ${ins.topKotaSO[0].name} (${ins.topKotaSO[0].pct.toFixed(1)}% dari total).`);
+  }
+  if (ins.topProdukSO && ins.topProdukSO[0]) {
+    bullets.push(`Produk terlaris (Selling Out): ${ins.topProdukSO[0].name} (${ins.topProdukSO[0].pct.toFixed(1)}% dari total).`);
+  }
+  const gapSI = si.total - targetSI;
+  const gapSO = so.total - targetSO;
+  bullets.push(
+    gapSI >= 0
+      ? `Selling In melampaui target sebesar ${formatIDR(gapSI, true)}. Pertahankan momentum dan pastikan ketersediaan stok di distributor.`
+      : `Selling In masih di bawah target sebesar ${formatIDR(Math.abs(gapSI), true)}. Perlu tindak lanjut ke tim sales/distributor untuk akselerasi pemesanan.`
+  );
+  bullets.push(
+    gapSO >= 0
+      ? `Selling Out melampaui target sebesar ${formatIDR(gapSO, true)}. Pertimbangkan penambahan stok agar tidak terjadi out-of-stock di toko.`
+      : `Selling Out masih di bawah target sebesar ${formatIDR(Math.abs(gapSO), true)}. Disarankan evaluasi program promosi/aktivasi di titik penjualan.`
+  );
+  return bullets;
+}
+
+async function generateReportPptx(M, f, onProgress) {
+  const mod = await import("pptxgenjs");
+  const PptxGenJS = mod.default;
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: "CBS169", width: 13.33, height: 7.5 });
+  pptx.layout = "CBS169";
+
+  const year = M.years[M.years.length - 1];
+  const monthLabel = f.months && f.months.length ? f.months.map(mi => MONTHS[mi]).join(", ") : "Jan – Des";
+  const filterOpts = { year, months: f.months, regions: f.regions, areas: f.areas, kotas: f.kotas, brands: f.brands };
+
+  onProgress && onProgress("Mengumpulkan data...");
+  const siBrand = computeDashboardSeries(M, { ...filterOpts, trx: "Selling In", groupBy: "brand" });
+  const soBrand = computeDashboardSeries(M, { ...filterOpts, trx: "Selling Out", groupBy: "brand" });
+  const siRegion = computeDashboardSeries(M, { ...filterOpts, trx: "Selling In", groupBy: "region" });
+  const soRegion = computeDashboardSeries(M, { ...filterOpts, trx: "Selling Out", groupBy: "region" });
+  const targetSI = computeYearTarget(M, { ...filterOpts, trx: "Target SI" });
+  const targetSO = computeYearTarget(M, { ...filterOpts, trx: "Target SO" });
+  const growthSI = computeGrowthSeries(M, { ...filterOpts, trx: "Selling In", groupBy: "brand" });
+  const growthSO = computeGrowthSeries(M, { ...filterOpts, trx: "Selling Out", groupBy: "brand" });
+  const ins = computeInsights(M, filterOpts);
+
+  const heroBg = makeGradientDataUrl([[0, "#5F72A8"], [0.55, "#93A9D1"], [1, "#F3DCEC"]], 1280, 720);
+  const bandBg = makeGradientDataUrl([[0, "#7C8FC4"], [1, "#93A9D1"]], 1280, 170);
+  const TXT = "241934", SUB = "6E6480", WHITE = "FFFFFF";
+
+  function addHeader(slide, title) {
+    slide.background = { color: "FAF9FC" };
+    slide.addImage({ data: bandBg, x: 0, y: 0, w: 13.33, h: 1.05 });
+    slide.addText(title, { x: 0.55, y: 0.22, w: 10, h: 0.65, fontSize: 26, bold: true, color: WHITE, fontFace: "Arial" });
+    slide.addImage({ data: LOGO_CBS, x: 12.15, y: 0.28, w: 0.62, h: 0.5, sizing: { type: "contain", w: 0.62, h: 0.5 } });
+  }
+
+  function addCard(slide, { x, y, w, h, label, value, sub, accent }) {
+    slide.addShape(pptx.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.08, fill: { color: "FFFFFF" }, line: { color: "EDE7F5", width: 1 } });
+    slide.addShape(pptx.ShapeType.roundRect, { x: x + 0.18, y: y + 0.18, w: 0.32, h: 0.32, rectRadius: 0.16, fill: { color: accent, transparency: 78 } });
+    slide.addText(label, { x: x + 0.18, y: y + h - 0.62, w: w - 0.36, h: 0.3, fontSize: 10, color: SUB, fontFace: "Arial" });
+    slide.addText(value, { x: x + 0.18, y: y + h - 0.94, w: w - 0.36, h: 0.4, fontSize: 17, bold: true, color: TXT, fontFace: "Arial" });
+    if (sub) slide.addText(sub, { x: x + 0.18, y: y + h - 0.34, w: w - 0.36, h: 0.28, fontSize: 9, color: SUB, fontFace: "Arial" });
+  }
+
+  function seriesToChartData(chartSeries, colorMap) {
+    return chartSeries.activeBrands.map(name => ({
+      name,
+      labels: chartSeries.chartData.map(r => r.month),
+      values: chartSeries.chartData.map(r => r[name] || 0),
+    }));
+  }
+
+  function addPerfSlide(title, siSeries, soSeries, colorMap, dimLabel, tSI, tSO, gSI, gSO) {
+    const slide = pptx.addSlide();
+    addHeader(slide, title);
+
+    const totalSI = siSeries.total;
+    const totalSO = soSeries.total;
+    const achvSI = tSI > 0 ? (totalSI / tSI) * 100 : 0;
+    const achvSO = tSO > 0 ? (totalSO / tSO) * 100 : 0;
+
+    const cardY = 1.28, cardH = 1.15, cardW = 2.9, gap = 0.18;
+    addCard(slide, { x: 0.5, y: cardY, w: cardW, h: cardH, label: "Total Selling In", value: formatIDR(totalSI, true), sub: `Target: ${formatIDR(tSI, true)} (${achvSI.toFixed(0)}%)`, accent: "7FB4E8" });
+    addCard(slide, { x: 0.5 + (cardW + gap), y: cardY, w: cardW, h: cardH, label: "Growth Selling In", value: (gSI.growthPct >= 0 ? "+" : "") + gSI.growthPct.toFixed(1) + "%", sub: `vs tahun ${gSI.prevYear}`, accent: "8FD6AC" });
+    addCard(slide, { x: 0.5 + (cardW + gap) * 2, y: cardY, w: cardW, h: cardH, label: "Total Selling Out", value: formatIDR(totalSO, true), sub: `Target: ${formatIDR(tSO, true)} (${achvSO.toFixed(0)}%)`, accent: "F3A8C6" });
+    addCard(slide, { x: 0.5 + (cardW + gap) * 3, y: cardY, w: cardW, h: cardH, label: "Growth Selling Out", value: (gSO.growthPct >= 0 ? "+" : "") + gSO.growthPct.toFixed(1) + "%", sub: `vs tahun ${gSO.prevYear}`, accent: "B6A4EA" });
+
+    const chartY = 2.75, chartH = 4.35, chartW = 6.05;
+    const siData = seriesToChartData(siSeries, colorMap);
+    const soData = seriesToChartData(soSeries, colorMap);
+    const siColors = siSeries.activeBrands.map(n => hexNoHash(colorMap[n]));
+    const soColors = soSeries.activeBrands.map(n => hexNoHash(colorMap[n]));
+
+    slide.addText(`Selling In per ${dimLabel}`, { x: 0.5, y: chartY - 0.32, w: chartW, h: 0.3, fontSize: 12, bold: true, color: TXT, fontFace: "Arial" });
+    slide.addChart(pptx.ChartType.bar, siData, {
+      x: 0.5, y: chartY, w: chartW, h: chartH, barGrouping: "stacked", chartColors: siColors,
+      showLegend: true, legendPos: "b", legendFontSize: 8, catAxisLabelFontSize: 9, valAxisHidden: true,
+      dataLabelColor: "241934", showValue: false, barGapWidthPct: 35,
+    });
+    slide.addText(`Selling Out per ${dimLabel}`, { x: 6.78, y: chartY - 0.32, w: chartW, h: 0.3, fontSize: 12, bold: true, color: TXT, fontFace: "Arial" });
+    slide.addChart(pptx.ChartType.bar, soData, {
+      x: 6.78, y: chartY, w: chartW, h: chartH, barGrouping: "stacked", chartColors: soColors,
+      showLegend: true, legendPos: "b", legendFontSize: 8, catAxisLabelFontSize: 9, valAxisHidden: true,
+      dataLabelColor: "241934", showValue: false, barGapWidthPct: 35,
+    });
+  }
+
+  // ---------- SLIDE 1: Title ----------
+  onProgress && onProgress("Menyusun halaman judul...");
+  const s1 = pptx.addSlide();
+  s1.background = { data: heroBg };
+  s1.addImage({ data: LOGO_CBS, x: 5.67, y: 1.05, w: 2.0, h: 1.24, sizing: { type: "contain", w: 2.0, h: 1.24 } });
+  s1.addText("SALES UPDATE", { x: 0, y: 2.85, w: 13.33, h: 0.55, align: "center", fontSize: 18, color: "FFFFFF", fontFace: "Arial", charSpacing: 3 });
+  s1.addText(`Periode ${monthLabel} ${year}`, { x: 0, y: 3.4, w: 13.33, h: 0.95, align: "center", fontSize: 38, bold: true, color: "FFFFFF", fontFace: "Arial" });
+  s1.addText("PT. Cahaya Bintang Sempurna", { x: 0, y: 4.35, w: 13.33, h: 0.45, align: "center", fontSize: 14, color: "EFE9F7", fontFace: "Arial" });
+  const logos1 = [LOGO_BIOAQUA, LOGO_MBF, LOGO_NDR, LOGO_KOJIESAN];
+  let lx = 4.66;
+  logos1.forEach((src) => { s1.addImage({ data: src, x: lx, y: 6.35, w: 1.0, h: 0.55, sizing: { type: "contain", w: 1.0, h: 0.55 } }); lx += 1.15; });
+
+  // ---------- SLIDE 2: Contents ----------
+  const s2 = pptx.addSlide();
+  addHeader(s2, "Contents");
+  const contentItems = [
+    "a.  Performance Sales by Brand",
+    "b.  Performance Sales by Region",
+    "c.  Top 10",
+    "d.  Insight",
+  ];
+  contentItems.forEach((t, i) => {
+    s2.addShape(pptx.ShapeType.roundRect, { x: 1.0, y: 1.7 + i * 1.05, w: 0.5, h: 0.5, rectRadius: 0.25, fill: { color: ["7FB4E8", "F3A8C6", "8FD6AC", "B6A4EA"][i % 4] } });
+    s2.addText(String.fromCharCode(97 + i), { x: 1.0, y: 1.7 + i * 1.05, w: 0.5, h: 0.5, align: "center", valign: "middle", fontSize: 16, bold: true, color: "FFFFFF", fontFace: "Arial" });
+    s2.addText(t.slice(4), { x: 1.75, y: 1.7 + i * 1.05, w: 9, h: 0.5, valign: "middle", fontSize: 18, color: TXT, fontFace: "Arial" });
+  });
+
+  // ---------- SLIDE 3: Performance by Brand ----------
+  onProgress && onProgress("Menyusun performance brand...");
+  addPerfSlide("Performance Sales by Brand", siBrand, soBrand, BRAND_COLORS, "Brand", targetSI, targetSO, growthSI, growthSO);
+
+  // ---------- SLIDE 4: Performance by Region ----------
+  onProgress && onProgress("Menyusun performance region...");
+  addPerfSlide("Performance Sales by Region", siRegion, soRegion, REGION_COLORS, "Region", targetSI, targetSO, growthSI, growthSO);
+
+  // ---------- SLIDE 5: Top 10 ----------
+  onProgress && onProgress("Menyusun Top 10...");
+  const s5 = pptx.addSlide();
+  addHeader(s5, "Top 10");
+  function topTable(list, title2, x, y, accent) {
+    s5.addText(title2, { x, y, w: 6.0, h: 0.3, fontSize: 12, bold: true, color: TXT, fontFace: "Arial" });
+    const rows = [[
+      { text: "#", options: { bold: true, fontSize: 9, color: WHITE, fill: { color: accent } } },
+      { text: "Nama", options: { bold: true, fontSize: 9, color: WHITE, fill: { color: accent } } },
+      { text: "Value", options: { bold: true, fontSize: 9, color: WHITE, fill: { color: accent } } },
+      { text: "%", options: { bold: true, fontSize: 9, color: WHITE, fill: { color: accent } } },
+    ]];
+    list.slice(0, 10).forEach((item, i) => {
+      rows.push([
+        { text: String(i + 1), options: { fontSize: 8.5 } },
+        { text: item.name, options: { fontSize: 8.5 } },
+        { text: formatIDR(item.value, true), options: { fontSize: 8.5, align: "right" } },
+        { text: item.pct.toFixed(1) + "%", options: { fontSize: 8.5, align: "right" } },
+      ]);
+    });
+    s5.addTable(rows, { x, y: y + 0.32, w: 6.0, colW: [0.5, 3.3, 1.3, 0.9], border: { type: "solid", color: "EDE7F5", pt: 0.5 }, autoPage: false, rowH: 0.235 });
+  }
+  topTable(ins.topKotaSI, "Top 10 Kota — Selling In", 0.5, 1.25, "7FB4E8");
+  topTable(ins.topKotaSO, "Top 10 Kota — Selling Out", 6.85, 1.25, "F3A8C6");
+  topTable(ins.topProdukSI, "Top 10 Produk — Selling In", 0.5, 4.35, "8FD6AC");
+  topTable(ins.topProdukSO, "Top 10 Produk — Selling Out", 6.85, 4.35, "B6A4EA");
+
+  // ---------- SLIDE 6: Insight ----------
+  onProgress && onProgress("Menyusun insight...");
+  const s6 = pptx.addSlide();
+  addHeader(s6, "Insight");
+  const bullets = buildInsightBullets({ si: siBrand, so: soBrand, targetSI, targetSO, growthSI, growthSO, ins, monthLabel });
+  s6.addText(
+    bullets.map(b => ({ text: b, options: { bullet: { characterCode: "25CF", indent: 18 }, fontSize: 13, color: TXT, paraSpaceAfter: 14, breakLine: true } })),
+    { x: 0.6, y: 1.35, w: 12.1, h: 5.6, fontFace: "Arial", valign: "top" }
+  );
+
+  // ---------- SLIDE 7: Closing ----------
+  const s7 = pptx.addSlide();
+  s7.background = { data: heroBg };
+  s7.addImage({ data: LOGO_CBS, x: 5.86, y: 2.15, w: 1.6, h: 1.0, sizing: { type: "contain", w: 1.6, h: 1.0 } });
+  s7.addText("TERIMA KASIH", { x: 0, y: 3.4, w: 13.33, h: 0.9, align: "center", fontSize: 34, bold: true, color: "FFFFFF", fontFace: "Arial" });
+  s7.addText("PT. Cahaya Bintang Sempurna · Sales Performance", { x: 0, y: 4.2, w: 13.33, h: 0.4, align: "center", fontSize: 12, color: "EFE9F7", fontFace: "Arial" });
+
+  onProgress && onProgress("Membuat file...");
+  await pptx.writeFile({ fileName: `Sales_Report_${monthLabel.replace(/[, ]+/g, "-")}_${year}.pptx` });
+}
+
+function ReportingPage({ M }) {
+  const [monthsSel, setMonthsSel] = useState([]);
+  const [regions, setRegions] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [kotas, setKotas] = useState([]);
+  const [brands, setBrands] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [status, setStatus] = useState(null);
+
+  async function handleDownload() {
+    setBusy(true); setStatus(null); setProgress("Memulai...");
+    try {
+      const months = monthsSel.map(m => MONTHS.indexOf(m));
+      await generateReportPptx(M, { months, regions, areas, kotas, brands }, setProgress);
+      setStatus({ type: "ok", msg: "Laporan PPTX berhasil dibuat dan diunduh." });
+    } catch (err) {
+      setStatus({ type: "err", msg: "Gagal membuat laporan: " + err.message });
+    } finally {
+      setBusy(false); setProgress("");
+    }
+  }
+
+  return (
+    <div className="cbs-fadein space-y-5 max-w-3xl">
+      <div className="cbs-card p-6">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ background: "#93A9D120" }}>
+            <FileText size={18} color="#5F72A8" />
+          </div>
+          <div>
+            <div className="cbs-display text-lg" style={{ color: "#241934" }}>Reporting</div>
+            <div className="text-xs" style={{ color: "#8A7FA0" }}>Unduh laporan Sales Update dalam format PowerPoint (.pptx)</div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 mt-5">
+          <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
+          <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
+          <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
+          <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+          <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
+        </div>
+
+        <button onClick={handleDownload} disabled={busy}
+          className="mt-5 flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white"
+          style={{ background: busy ? "#B8AECB" : "#241934" }}>
+          <Download size={16} />
+          {busy ? (progress || "Memproses...") : "Download Laporan PPTX"}
+        </button>
+
+        {status && (
+          <div className="flex items-start gap-2 mt-4 p-3 rounded-xl text-sm"
+            style={{ background: status.type === "ok" ? "#EAF5F3" : "#FAEBEE", color: status.type === "ok" ? "#2E7873" : "#C0596B" }}>
+            {status.type === "ok" ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertCircle size={16} className="mt-0.5 shrink-0" />}
+            <span>{status.msg}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="cbs-card p-6">
+        <div className="cbs-display text-base mb-2">Isi Laporan</div>
+        <ol className="text-sm space-y-1.5 list-decimal list-inside" style={{ color: "#6E6480" }}>
+          <li>Halaman Utama — Judul periode &amp; logo brand</li>
+          <li>Contents — Daftar isi laporan</li>
+          <li>Performance Sales by Brand — Ringkasan &amp; chart bulanan per brand</li>
+          <li>Performance Sales by Region — Ringkasan &amp; chart bulanan per region</li>
+          <li>Top 10 — Kota &amp; Produk teratas (Selling In &amp; Selling Out)</li>
+          <li>Insight — Temuan dan rekomendasi tindak lanjut</li>
+          <li>Penutup — Terima kasih</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    PAGE: UPLOAD (admin only)
    ============================================================ */
 function UploadPage({ onDataLoaded, dataMeta }) {
@@ -1651,6 +1952,7 @@ export default function App() {
           {page === "produk" && <ProdukPage M={M} />}
           {page === "target" && <SalesGrowthPage M={M} />}
           {page === "insight" && <InsightPage M={M} />}
+          {page === "reporting" && <ReportingPage M={M} />}
           {page === "upload" && user.role === "admin" && <UploadPage onDataLoaded={handleDataLoaded} dataMeta={dataMeta} />}
         </div>
       </div>
