@@ -355,10 +355,11 @@ function computeProdukPerformance(M, f) {
 function computeGrowthSeries(M, f) {
   const { RAW, d } = M;
   const tx = RAW.tx;
-  const curMonth = new Array(12).fill(0);
-  const prevMonth = new Array(12).fill(0);
-  let curTotal = 0, prevTotal = 0;
   const prevYear = String(parseInt(f.year, 10) - 1);
+  const sumsCur = {}, sumsPrev = {};
+  for (let m = 0; m < 12; m++) { sumsCur[m] = {}; sumsPrev[m] = {}; }
+  let curTotal = 0, prevTotal = 0;
+  const groupBy = f.groupBy || "brand";
 
   for (let i = 0; i < M.N; i++) {
     const trxLabel = d.trx[tx.trx[i]];
@@ -374,14 +375,35 @@ function computeGrowthSeries(M, f) {
     const brandLabel = d.brand[RAW.prodMeta.brand[prodIdx]];
     if (!inSet(f.brands, brandLabel)) continue;
 
+    const key = groupBy === "region" ? regionLabel : brandLabel;
     const amt = tx.amt[i];
-    if (M.txYear[i] === f.year) { curMonth[M.txMonth[i]] += amt; curTotal += amt; }
-    else if (M.txYear[i] === prevYear) { prevMonth[M.txMonth[i]] += amt; prevTotal += amt; }
+    const m = M.txMonth[i];
+    if (M.txYear[i] === f.year) { sumsCur[m][key] = (sumsCur[m][key] || 0) + amt; curTotal += amt; }
+    else if (M.txYear[i] === prevYear) { sumsPrev[m][key] = (sumsPrev[m][key] || 0) + amt; prevTotal += amt; }
   }
 
-  const chartData = MONTHS.map((label, m) => ({ month: label, current: Math.round(curMonth[m]), previous: Math.round(prevMonth[m]) }));
+  const orderArr = groupBy === "region" ? REGION_CHART_ORDER : BRAND_ORDER;
+  const presetList = groupBy === "region" ? f.regions : f.brands;
+  const presentSet = new Set();
+  for (let m = 0; m < 12; m++) {
+    Object.keys(sumsCur[m]).forEach(k => presentSet.add(k));
+    Object.keys(sumsPrev[m]).forEach(k => presentSet.add(k));
+  }
+  let activeSeries = presetList && presetList.length ? presetList.slice() : Array.from(presentSet);
+  if (!activeSeries.length) activeSeries = orderArr.slice();
+  activeSeries.sort((a, b) => orderArr.indexOf(a) - orderArr.indexOf(b));
+
+  const chartData = MONTHS.map((label, m) => {
+    const row = { month: label };
+    activeSeries.forEach(k => {
+      row["prev_" + k] = Math.round(sumsPrev[m][k] || 0);
+      row["cur_" + k] = Math.round(sumsCur[m][k] || 0);
+    });
+    return row;
+  });
+
   const growthPct = prevTotal > 0 ? ((curTotal - prevTotal) / prevTotal) * 100 : (curTotal > 0 ? 100 : 0);
-  return { chartData, curTotal, prevTotal, growthPct, prevYear };
+  return { chartData, activeSeries, curTotal, prevTotal, growthPct, prevYear };
 }
 
 /* Insights page: top kota, top produk, channel mix, yoy trend */
@@ -1246,10 +1268,13 @@ function SalesGrowthPage({ M }) {
   const [areas, setAreas] = useState([]);
   const [kotas, setKotas] = useState([]);
   const [brands, setBrands] = useState([]);
+  const [groupBy, setGroupBy] = useState("brand");
 
   const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
-  const si = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
-  const so = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const si = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands, groupBy }), [M, year, months, regions, areas, kotas, brands, groupBy]);
+  const so = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands, groupBy }), [M, year, months, regions, areas, kotas, brands, groupBy]);
+  const colorMap = groupBy === "region" ? REGION_COLORS : BRAND_COLORS;
+  const groupLabel = groupBy === "region" ? "Region" : "Brand";
 
   return (
     <div className="cbs-fadein space-y-5">
@@ -1269,27 +1294,67 @@ function SalesGrowthPage({ M }) {
         <KPICard icon={TrendingUp} label="Growth Selling Out" value={formatPct(so.growthPct)} sub={`Dibanding tahun ${so.prevYear}`} accent="#B6A4EA" />
       </div>
 
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="cbs-display text-base" style={{ color: "#241934" }}>Chart Perbandingan Tahun</div>
+        <SingleSelect label="Tampilkan per" value={groupBy} onChange={setGroupBy} width={170}
+          options={[{ value: "brand", label: "Brand" }, { value: "region", label: "Region" }]} />
+      </div>
+
       <div className="grid lg:grid-cols-2 gap-5">
-        <GrowthChartCard title="Selling In" subtitle={`Perbandingan ${si.prevYear} vs ${year}, Jan–Des`} data={si.chartData} prevYear={si.prevYear} year={year} currentColor="#7FB4E8" />
-        <GrowthChartCard title="Selling Out" subtitle={`Perbandingan ${so.prevYear} vs ${year}, Jan–Des`} data={so.chartData} prevYear={so.prevYear} year={year} currentColor="#F3A8C6" />
+        <GrowthChartCard title={`Selling In per ${groupLabel}`} subtitle={`Perbandingan ${si.prevYear} vs ${year}, Jan–Des`}
+          data={si.chartData} series={si.activeSeries} colorMap={colorMap} prevYear={si.prevYear} year={year} />
+        <GrowthChartCard title={`Selling Out per ${groupLabel}`} subtitle={`Perbandingan ${so.prevYear} vs ${year}, Jan–Des`}
+          data={so.chartData} series={so.activeSeries} colorMap={colorMap} prevYear={so.prevYear} year={year} />
       </div>
     </div>
   );
 }
 
-function GrowthChartCard({ title, subtitle, data, prevYear, year, currentColor }) {
+function GrowthChartCard({ title, subtitle, data, series, colorMap, prevYear, year }) {
+  const prevKeys = series.map(s => "prev_" + s);
+  const curKeys = series.map(s => "cur_" + s);
+
+  function renderTotalLabel(prefix, keys) {
+    return (props) => {
+      const { x, y, width, index } = props;
+      const row = data[index];
+      if (!row) return null;
+      const total = series.reduce((s, k) => s + (row[prefix + k] || 0), 0);
+      if (!total) return null;
+      return (
+        <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={9.5} fontWeight={400} fill="#241934">
+          {formatValue(total, true)}
+        </text>
+      );
+    };
+  }
+
   return (
     <div className="cbs-card p-5">
       <div className="mb-1 cbs-display text-lg" style={{ color: "#241934" }}>{title}</div>
-      <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
-      <ResponsiveContainer width="100%" height={300}>
-        <BarChart data={data} margin={{ top: 10, right: 4, left: 0, bottom: 0 }} barGap={4} barCategoryGap="30%">
+      <div className="text-xs mb-1" style={{ color: "#8A7FA0" }}>{subtitle}</div>
+      <div className="flex items-center gap-3 mb-3 text-[10px]" style={{ color: "#8A7FA0" }}>
+        <span className="flex items-center gap-1"><span className="rounded-full inline-block" style={{ width: 7, height: 7, background: "#B8AECB" }} />{prevYear} (pudar)</span>
+        <span className="flex items-center gap-1"><span className="rounded-full inline-block" style={{ width: 7, height: 7, background: "#241934" }} />{year} (solid)</span>
+      </div>
+      <ResponsiveContainer width="100%" height={310}>
+        <BarChart data={data} margin={{ top: 22, right: 4, left: 0, bottom: 0 }} barGap={2} barCategoryGap="18%">
           <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
           <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
           <Tooltip formatter={(v, name) => [formatIDR(v), name]} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar dataKey="previous" name={prevYear} fill="#D8D3E8" radius={[6, 6, 0, 0]} />
-          <Bar dataKey="current" name={String(year)} fill={currentColor} radius={[6, 6, 0, 0]} />
+          <Legend wrapperStyle={{ fontSize: 11 }} payload={series.map(s => ({ value: s, type: "square", color: (colorMap && colorMap[s]) || "#999" }))} />
+          {series.map((s) => (
+            <Bar key={"prev_" + s} dataKey={"prev_" + s} stackId="prev" fill={(colorMap && colorMap[s]) || "#999"} fillOpacity={0.4} legendType="none"
+              shape={(p) => <StackSegmentShape {...p} brands={prevKeys} radius={7} />}>
+              {s === series[series.length - 1] && <LabelList dataKey={"prev_" + s} content={renderTotalLabel("prev_", prevKeys)} />}
+            </Bar>
+          ))}
+          {series.map((s) => (
+            <Bar key={"cur_" + s} dataKey={"cur_" + s} stackId="cur" fill={(colorMap && colorMap[s]) || "#999"} name={s}
+              shape={(p) => <StackSegmentShape {...p} brands={curKeys} radius={7} />}>
+              {s === series[series.length - 1] && <LabelList dataKey={"cur_" + s} content={renderTotalLabel("cur_", curKeys)} />}
+            </Bar>
+          ))}
         </BarChart>
       </ResponsiveContainer>
     </div>
