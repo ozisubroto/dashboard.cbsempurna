@@ -1407,8 +1407,8 @@ function InsightPage({ M }) {
       <div className="grid lg:grid-cols-2 gap-5">
         <TopListCard title="Top 20 Kota — Selling In" items={ins.topKotaSI} color="#7FB4E8" />
         <TopListCard title="Top 20 Kota — Selling Out" items={ins.topKotaSO} color="#F3A8C6" />
-        <TopListCard title="Top 20 Produk — Selling In" items={ins.topProdukSI} color="#7FB4E8" maxChars={50} />
-        <TopListCard title="Top 20 Produk — Selling Out" items={ins.topProdukSO} color="#F3A8C6" maxChars={50} />
+        <TopListCard title="Top 20 Produk — Selling In" items={ins.topProdukSI} color="#7FB4E8" />
+        <TopListCard title="Top 20 Produk — Selling Out" items={ins.topProdukSO} color="#F3A8C6" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
@@ -1419,18 +1419,15 @@ function InsightPage({ M }) {
   );
 }
 
-function TopListCard({ title, items, color, maxChars }) {
+function TopListCard({ title, items, color }) {
   const max = items[0] ? items[0].value : 1;
   return (
     <div className="cbs-card p-5">
       <div className="cbs-display text-base mb-3">{title}</div>
       <div className="overflow-y-auto cbs-scroll pr-1" style={{ maxHeight: 480 }}>
-        {items.map((k, i) => {
-          const displayName = maxChars && k.name.length > maxChars ? k.name.slice(0, maxChars) + "…" : k.name;
-          return (
-            <BarRow key={k.name} rank={i + 1} label={displayName} fullLabel={k.name} value={k.value} max={max} color={color} fmt={v => formatIDR(v, true)} contribPct={k.pct} />
-          );
-        })}
+        {items.map((k, i) => (
+          <BarRow key={k.name} rank={i + 1} label={k.name} value={k.value} max={max} color={color} fmt={v => formatIDR(v, true)} contribPct={k.pct} />
+        ))}
         {items.length === 0 && <div className="text-xs py-6 text-center" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</div>}
       </div>
     </div>
@@ -1444,7 +1441,6 @@ function YoyTrendCard({ title, subtitle, data, years }) {
       <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 22, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid vertical={false} stroke="#EDE7F5" />
           <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
           <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
           <Tooltip formatter={v => formatIDR(v)} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
@@ -1459,13 +1455,13 @@ function YoyTrendCard({ title, subtitle, data, years }) {
     </div>
   );
 }
-function BarRow({ rank, label, value, max, color, fmt, contribPct, fullLabel }) {
+function BarRow({ rank, label, value, max, color, fmt, contribPct }) {
   const barPct = max ? (value / max) * 100 : 0;
   return (
     <div className="mb-2.5">
-      <div className="flex items-center justify-between text-xs mb-1">
-        <span className="truncate" style={{ color: "#241934", maxWidth: 260 }} title={fullLabel || label}>{rank}. {label}</span>
-        <span className="font-semibold tabular-nums shrink-0 ml-2" style={{ color }}>
+      <div className="flex items-center justify-between gap-2 text-xs mb-1">
+        <span className="truncate flex-1 min-w-0" style={{ color: "#241934" }} title={label}>{rank}. {label}</span>
+        <span className="font-semibold tabular-nums shrink-0" style={{ color }}>
           {fmt(value)}{contribPct !== undefined && <span style={{ color: "#8A7FA0", fontWeight: 500 }}> · {contribPct.toFixed(1)}%</span>}
         </span>
       </div>
