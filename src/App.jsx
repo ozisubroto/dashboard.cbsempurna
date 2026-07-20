@@ -59,8 +59,8 @@ const REGION_COLORS = {
 };
 
 const USERS = {
-  dataanalyst: { password: "aalalawiyah", role: "admin", name: "Ozi Fauzi" },
-  cbsempurna:  { password: "cbsempurna123",  role: "view",  name: "PT. Cahaya Bintang Sempurna" },
+  admin: { password: "admin123", role: "admin", name: "Admin CBS" },
+  view:  { password: "view123",  role: "view",  name: "Sales Viewer" },
 };
 
 /* ============================================================
@@ -809,27 +809,8 @@ function Sidebar({ page, setPage, user, onLogout, dataMeta, collapsed, onToggleC
         )}
       </div>
       {!collapsed && (
-        <div className="px-4 pb-2 text-[11px]" style={{ color: "#7A6E93" }}>
+        <div className="px-4 pb-4 text-[11px]" style={{ color: "#7A6E93" }}>
           {dataMeta.txCount.toLocaleString("id-ID")} baris transaksi · {dataMeta.years.join("–")}
-        </div>
-      )}
-      <div className={"mx-3 mb-4 p-3 rounded-xl flex items-center " + (collapsed ? "justify-center" : "gap-2")} style={{ background: "rgba(255,255,255,0.06)" }}>
-        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}>
-          {user.name.slice(0, 1)}
-        </div>
-        {!collapsed && (
-          <>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs text-white truncate">{user.name}</div>
-              <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{user.role}</div>
-            </div>
-            <button onClick={onLogout} title="Keluar"><LogOut size={15} color="#B8AECB" /></button>
-          </>
-        )}
-      </div>
-      {collapsed && (
-        <div className="flex justify-center pb-4">
-          <button onClick={onLogout} title="Keluar"><LogOut size={15} color="#B8AECB" /></button>
         </div>
       )}
     </div>
@@ -1653,8 +1634,15 @@ export default function App() {
             </div>
             <div className="text-xs" style={{ color: "#8A7FA0" }}>PT. Cahaya Bintang Sempurna · Sales Performance</div>
           </div>
-          <div className="hidden sm:flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full" style={{ background: "#F7F5FA", color: "#6E6480" }}>
-            <Building2 size={13} /> {user.role === "admin" ? "Admin" : "Viewer"}
+          <div className="flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl" style={{ background: "#241934" }}>
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}>
+              {user.name.slice(0, 1)}
+            </div>
+            <div className="hidden sm:block">
+              <div className="text-xs text-white leading-tight">{user.name}</div>
+              <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{user.role}</div>
+            </div>
+            <button onClick={handleLogout} title="Keluar" className="ml-1"><LogOut size={15} color="#B8AECB" /></button>
           </div>
         </div>
         <div className="flex-1 p-4 md:p-8 overflow-y-auto cbs-scroll">
