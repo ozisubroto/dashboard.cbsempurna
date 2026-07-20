@@ -410,43 +410,61 @@ function computeGrowthSeries(M, f) {
 function computeInsights(M, f) {
   const { RAW, d } = M;
   const tx = RAW.tx;
-  const kotaMap = new Map();
-  const prodMap = new Map();
-  const chanelMix = { Offline: 0, Online: 0 };
-  const yoy = {};
-  M.years.forEach(y => yoy[y] = new Array(12).fill(0));
+  const buckets = {
+    "Selling In": { kotaMap: new Map(), prodMap: new Map(), total: 0 },
+    "Selling Out": { kotaMap: new Map(), prodMap: new Map(), total: 0 },
+  };
+  const yoy = { "Selling In": {}, "Selling Out": {} };
+  M.years.forEach(y => { yoy["Selling In"][y] = new Array(12).fill(0); yoy["Selling Out"][y] = new Array(12).fill(0); });
 
   for (let i = 0; i < M.N; i++) {
     const trxLabel = d.trx[tx.trx[i]];
-    if (trxLabel !== f.trx) continue;
     const year = M.txYear[i];
+    const regionLabel = d.reg[tx.reg[i]];
+    const areaLabel = d.area[tx.area[i]];
     const kotaLabel = d.kota[tx.kota[i]];
     const prodIdx = tx.prod[i];
     const prodLabel = d.prod[prodIdx];
     const brandLabel = d.brand[RAW.prodMeta.brand[prodIdx]];
     const amt = tx.amt[i];
+    const passCommon = inSet(f.regions, regionLabel) && inSet(f.areas, areaLabel) && inSet(f.kotas, kotaLabel) && inSet(f.brands, brandLabel);
 
-    if (year === f.year) {
-      kotaMap.set(kotaLabel, (kotaMap.get(kotaLabel) || 0) + amt);
-      const pk = brandLabel + " — " + prodLabel;
-      prodMap.set(pk, (prodMap.get(pk) || 0) + amt);
-      chanelMix[M.chanelOfRegionIdx(tx.reg[i])] += amt;
-    }
-    if (yoy[year]) yoy[year][M.txMonth[i]] += amt;
+    if (passCommon && yoy[trxLabel] && yoy[trxLabel][year]) yoy[trxLabel][year][M.txMonth[i]] += amt;
+
+    if (year !== f.year) continue;
+    if (!inSet(f.months, M.txMonth[i])) continue;
+    if (!passCommon) continue;
+    const bucket = buckets[trxLabel];
+    if (!bucket) continue;
+    bucket.kotaMap.set(kotaLabel, (bucket.kotaMap.get(kotaLabel) || 0) + amt);
+    const pk = brandLabel + " — " + prodLabel;
+    bucket.prodMap.set(pk, (bucket.prodMap.get(pk) || 0) + amt);
+    bucket.total += amt;
   }
 
-  const topKota = Array.from(kotaMap.entries()).map(([k, v]) => ({ name: k, value: v }))
-    .sort((a, b) => b.value - a.value).slice(0, 5);
-  const topProduk = Array.from(prodMap.entries()).map(([k, v]) => ({ name: k, value: v }))
-    .sort((a, b) => b.value - a.value).slice(0, 5);
+  function topN(map, total, n) {
+    return Array.from(map.entries()).map(([k, v]) => ({ name: k, value: v, pct: total > 0 ? (v / total) * 100 : 0 }))
+      .sort((a, b) => b.value - a.value).slice(0, n);
+  }
 
-  const yoyChart = MONTHS.map((label, m) => {
-    const row = { month: label };
-    M.years.forEach(y => { row[y] = Math.round(yoy[y][m]); });
-    return row;
-  });
+  const topKotaSI = topN(buckets["Selling In"].kotaMap, buckets["Selling In"].total, 20);
+  const topKotaSO = topN(buckets["Selling Out"].kotaMap, buckets["Selling Out"].total, 20);
+  const topProdukSI = topN(buckets["Selling In"].prodMap, buckets["Selling In"].total, 20);
+  const topProdukSO = topN(buckets["Selling Out"].prodMap, buckets["Selling Out"].total, 20);
 
-  return { topKota, topProduk, chanelMix, yoyChart };
+  function buildYoyChart(trxLabel) {
+    return MONTHS.map((label, m) => {
+      const row = { month: label };
+      M.years.forEach(y => { row[y] = Math.round((yoy[trxLabel][y] || [])[m] || 0); });
+      return row;
+    });
+  }
+
+  return {
+    topKotaSI, topKotaSO, topProdukSI, topProdukSO,
+    yoyChartSI: buildYoyChart("Selling In"),
+    yoyChartSO: buildYoyChart("Selling Out"),
+  };
 }
 
 /* ============================================================
@@ -1366,81 +1384,88 @@ function GrowthChartCard({ title, subtitle, data, series, colorMap, prevYear, ye
    ============================================================ */
 function InsightPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
-  const [trx, setTrx] = useState("Selling Out");
-  const ins = useMemo(() => computeInsights(M, { year, trx }), [M, year, trx]);
+  const [monthsSel, setMonthsSel] = useState([]);
+  const [regions, setRegions] = useState([]);
+  const [areas, setAreas] = useState([]);
+  const [kotas, setKotas] = useState([]);
+  const [brands, setBrands] = useState([]);
 
-  const pieData = [
-    { name: "Offline", value: ins.chanelMix.Offline },
-    { name: "Online", value: ins.chanelMix.Online },
-  ];
-  const pieColors = ["#6B5CA5", "#CC9B3B"];
+  const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
+  const ins = useMemo(() => computeInsights(M, { year, months, regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
 
   return (
     <div className="cbs-fadein space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={110} options={M.years.map(y => ({ value: y, label: y }))} />
-        <SingleSelect label="Kategori Trx" value={trx} onChange={setTrx} width={160}
-          options={[{ value: "Selling Out", label: "Selling Out" }, { value: "Selling In", label: "Selling In" }]} />
+        <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
+        <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
+        <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
+        <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+        <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-5">
-        <div className="cbs-card p-5 lg:col-span-1">
-          <div className="cbs-display text-base mb-3">Top 5 Kota — {trx}</div>
-          {ins.topKota.map((k, i) => (
-            <BarRow key={k.name} rank={i + 1} label={k.name} value={k.value} max={ins.topKota[0] ? ins.topKota[0].value : 1} color="#6B5CA5" fmt={v => formatIDR(v, true)} />
-          ))}
-        </div>
-        <div className="cbs-card p-5 lg:col-span-1">
-          <div className="cbs-display text-base mb-3">Top 5 Produk — {trx}</div>
-          {ins.topProduk.map((k, i) => (
-            <BarRow key={k.name} rank={i + 1} label={k.name} value={k.value} max={ins.topProduk[0] ? ins.topProduk[0].value : 1} color="#CC9B3B" fmt={v => formatIDR(v, true)} />
-          ))}
-        </div>
-        <div className="cbs-card p-5 lg:col-span-1">
-          <div className="cbs-display text-base mb-3">Kontribusi Chanel — {trx}</div>
-          <ResponsiveContainer width="100%" height={190}>
-            <PieChart>
-              <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={3}>
-                {pieData.map((e, i) => <Cell key={e.name} fill={pieColors[i]} />)}
-              </Pie>
-              <Tooltip formatter={v => formatIDR(v)} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="flex justify-center gap-4 text-xs mt-1">
-            {pieData.map((e, i) => <span key={e.name} className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: pieColors[i] }} />{e.name}</span>)}
-          </div>
-        </div>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <TopListCard title="Top 20 Kota — Selling In" items={ins.topKotaSI} color="#7FB4E8" />
+        <TopListCard title="Top 20 Kota — Selling Out" items={ins.topKotaSO} color="#F3A8C6" />
+        <TopListCard title="Top 20 Produk — Selling In" items={ins.topProdukSI} color="#7FB4E8" />
+        <TopListCard title="Top 20 Produk — Selling Out" items={ins.topProdukSO} color="#F3A8C6" />
       </div>
 
-      <div className="cbs-card p-5">
-        <div className="cbs-display text-base mb-1">Tren Bulanan — Perbandingan Tahun</div>
-        <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{trx} nasional, seluruh brand</div>
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart data={ins.yoyChart} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-            <CartesianGrid vertical={false} stroke="#EDE7F5" />
-            <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: "#8A7FA0" }} axisLine={false} tickLine={false} tickFormatter={v => formatIDR(v, true)} width={64} />
-            <Tooltip formatter={v => formatIDR(v)} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            {M.years.map((y, i) => (
-              <Line key={y} type="monotone" dataKey={y} stroke={i % 2 ? "#CC9B3B" : "#6B5CA5"} strokeWidth={2.5} dot={{ r: 3 }} />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <YoyTrendCard title="Tren Bulanan — Selling In" subtitle="Perbandingan Tahun, nasional, seluruh brand" data={ins.yoyChartSI} years={M.years} />
+        <YoyTrendCard title="Tren Bulanan — Selling Out" subtitle="Perbandingan Tahun, nasional, seluruh brand" data={ins.yoyChartSO} years={M.years} />
       </div>
     </div>
   );
 }
-function BarRow({ rank, label, value, max, color, fmt }) {
-  const pct = max ? (value / max) * 100 : 0;
+
+function TopListCard({ title, items, color }) {
+  const max = items[0] ? items[0].value : 1;
+  return (
+    <div className="cbs-card p-5">
+      <div className="cbs-display text-base mb-3">{title}</div>
+      <div className="overflow-y-auto cbs-scroll pr-1" style={{ maxHeight: 480 }}>
+        {items.map((k, i) => (
+          <BarRow key={k.name} rank={i + 1} label={k.name} value={k.value} max={max} color={color} fmt={v => formatIDR(v, true)} contribPct={k.pct} />
+        ))}
+        {items.length === 0 && <div className="text-xs py-6 text-center" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</div>}
+      </div>
+    </div>
+  );
+}
+
+function YoyTrendCard({ title, subtitle, data, years }) {
+  return (
+    <div className="cbs-card p-5">
+      <div className="cbs-display text-base mb-1">{title}</div>
+      <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke="#EDE7F5" />
+          <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: "#8A7FA0" }} axisLine={false} tickLine={false} tickFormatter={v => formatIDR(v, true)} width={64} />
+          <Tooltip formatter={v => formatIDR(v)} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {years.map((y, i) => (
+            <Line key={y} type="monotone" dataKey={y} stroke={i % 2 ? "#CC9B3B" : "#6B5CA5"} strokeWidth={2.5} dot={{ r: 3 }} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+function BarRow({ rank, label, value, max, color, fmt, contribPct }) {
+  const barPct = max ? (value / max) * 100 : 0;
   return (
     <div className="mb-2.5">
       <div className="flex items-center justify-between text-xs mb-1">
-        <span className="truncate" style={{ color: "#241934", maxWidth: 200 }}>{rank}. {label}</span>
-        <span className="font-semibold tabular-nums shrink-0 ml-2" style={{ color }}>{fmt(value)}</span>
+        <span className="truncate" style={{ color: "#241934", maxWidth: 190 }}>{rank}. {label}</span>
+        <span className="font-semibold tabular-nums shrink-0 ml-2" style={{ color }}>
+          {fmt(value)}{contribPct !== undefined && <span style={{ color: "#8A7FA0", fontWeight: 500 }}> · {contribPct.toFixed(1)}%</span>}
+        </span>
       </div>
       <div className="h-1.5 rounded-full" style={{ background: "#F1ECFA" }}>
-        <div className="h-1.5 rounded-full" style={{ width: pct + "%", background: color }} />
+        <div className="h-1.5 rounded-full" style={{ width: barPct + "%", background: color }} />
       </div>
     </div>
   );
