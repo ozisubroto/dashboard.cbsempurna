@@ -1407,8 +1407,8 @@ function InsightPage({ M }) {
       <div className="grid lg:grid-cols-2 gap-5">
         <TopListCard title="Top 20 Kota — Selling In" items={ins.topKotaSI} color="#7FB4E8" />
         <TopListCard title="Top 20 Kota — Selling Out" items={ins.topKotaSO} color="#F3A8C6" />
-        <TopListCard title="Top 20 Produk — Selling In" items={ins.topProdukSI} color="#7FB4E8" />
-        <TopListCard title="Top 20 Produk — Selling Out" items={ins.topProdukSO} color="#F3A8C6" />
+        <TopListCard title="Top 20 Produk — Selling In" items={ins.topProdukSI} color="#7FB4E8" maxChars={50} />
+        <TopListCard title="Top 20 Produk — Selling Out" items={ins.topProdukSO} color="#F3A8C6" maxChars={50} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
@@ -1419,15 +1419,18 @@ function InsightPage({ M }) {
   );
 }
 
-function TopListCard({ title, items, color }) {
+function TopListCard({ title, items, color, maxChars }) {
   const max = items[0] ? items[0].value : 1;
   return (
     <div className="cbs-card p-5">
       <div className="cbs-display text-base mb-3">{title}</div>
       <div className="overflow-y-auto cbs-scroll pr-1" style={{ maxHeight: 480 }}>
-        {items.map((k, i) => (
-          <BarRow key={k.name} rank={i + 1} label={k.name} value={k.value} max={max} color={color} fmt={v => formatIDR(v, true)} contribPct={k.pct} />
-        ))}
+        {items.map((k, i) => {
+          const displayName = maxChars && k.name.length > maxChars ? k.name.slice(0, maxChars) + "…" : k.name;
+          return (
+            <BarRow key={k.name} rank={i + 1} label={displayName} fullLabel={k.name} value={k.value} max={max} color={color} fmt={v => formatIDR(v, true)} contribPct={k.pct} />
+          );
+        })}
         {items.length === 0 && <div className="text-xs py-6 text-center" style={{ color: "#8A7FA0" }}>Tidak ada data untuk filter ini.</div>}
       </div>
     </div>
@@ -1439,27 +1442,29 @@ function YoyTrendCard({ title, subtitle, data, years }) {
     <div className="cbs-card p-5">
       <div className="cbs-display text-base mb-1">{title}</div>
       <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
-      <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={280}>
+        <LineChart data={data} margin={{ top: 22, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke="#EDE7F5" />
           <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: "#8A7FA0" }} axisLine={false} tickLine={false} tickFormatter={v => formatIDR(v, true)} width={64} />
+          <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
           <Tooltip formatter={v => formatIDR(v)} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           {years.map((y, i) => (
-            <Line key={y} type="monotone" dataKey={y} stroke={i % 2 ? "#CC9B3B" : "#6B5CA5"} strokeWidth={2.5} dot={{ r: 3 }} />
+            <Line key={y} type="monotone" dataKey={y} stroke={i % 2 ? "#CC9B3B" : "#6B5CA5"} strokeWidth={2.5} dot={{ r: 3 }}>
+              <LabelList dataKey={y} position="top" formatter={v => formatValue(v, true)} style={{ fontSize: 9, fill: "#6E6480" }} />
+            </Line>
           ))}
         </LineChart>
       </ResponsiveContainer>
     </div>
   );
 }
-function BarRow({ rank, label, value, max, color, fmt, contribPct }) {
+function BarRow({ rank, label, value, max, color, fmt, contribPct, fullLabel }) {
   const barPct = max ? (value / max) * 100 : 0;
   return (
     <div className="mb-2.5">
       <div className="flex items-center justify-between text-xs mb-1">
-        <span className="truncate" style={{ color: "#241934", maxWidth: 190 }}>{rank}. {label}</span>
+        <span className="truncate" style={{ color: "#241934", maxWidth: 260 }} title={fullLabel || label}>{rank}. {label}</span>
         <span className="font-semibold tabular-nums shrink-0 ml-2" style={{ color }}>
           {fmt(value)}{contribPct !== undefined && <span style={{ color: "#8A7FA0", fontWeight: 500 }}> · {contribPct.toFixed(1)}%</span>}
         </span>
