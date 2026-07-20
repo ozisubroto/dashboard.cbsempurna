@@ -350,61 +350,38 @@ function computeProdukPerformance(M, f) {
   return rows;
 }
 
-/* Achievement Target */
-function computeAchievement(M, f) {
+/* Sales Growth (YoY) */
+/* Sales Growth: current year vs previous year, monthly + totals, for a given trx (Selling In/Out) */
+function computeGrowthSeries(M, f) {
   const { RAW, d } = M;
-  const tx = RAW.tx, tgt = RAW.tgt;
+  const tx = RAW.tx;
+  const curMonth = new Array(12).fill(0);
+  const prevMonth = new Array(12).fill(0);
+  let curTotal = 0, prevTotal = 0;
+  const prevYear = String(parseInt(f.year, 10) - 1);
 
-  function pass(regionLabel, areaLabel, kotaLabel) {
-    if (!inSet(f.regions, regionLabel)) return false;
-    if (!inSet(f.areas, areaLabel)) return false;
-    if (!inSet(f.kotas, kotaLabel)) return false;
-    return true;
-  }
-  function monthOk(m) { return f.month === "ALL" || f.month === m; }
-
-  const actual = { "Selling In": 0, "Selling Out": 0 };
-  const actualByBrand = {}; BRAND_ORDER.forEach(b => actualByBrand[b] = { "Selling In": 0, "Selling Out": 0 });
   for (let i = 0; i < M.N; i++) {
-    if (M.txYear[i] !== f.year) continue;
-    if (!monthOk(M.txMonth[i])) continue;
-    const regionLabel = d.reg[tx.reg[i]], areaLabel = d.area[tx.area[i]], kotaLabel = d.kota[tx.kota[i]];
-    if (!pass(regionLabel, areaLabel, kotaLabel)) continue;
     const trxLabel = d.trx[tx.trx[i]];
+    if (trxLabel !== f.trx) continue;
+    if (!inSet(f.months, M.txMonth[i])) continue;
+    const regionLabel = d.reg[tx.reg[i]];
+    if (!inSet(f.regions, regionLabel)) continue;
+    const areaLabel = d.area[tx.area[i]];
+    if (!inSet(f.areas, areaLabel)) continue;
+    const kotaLabel = d.kota[tx.kota[i]];
+    if (!inSet(f.kotas, kotaLabel)) continue;
     const prodIdx = tx.prod[i];
     const brandLabel = d.brand[RAW.prodMeta.brand[prodIdx]];
-    actual[trxLabel] += tx.amt[i];
-    if (actualByBrand[brandLabel]) actualByBrand[brandLabel][trxLabel] += tx.amt[i];
+    if (!inSet(f.brands, brandLabel)) continue;
+
+    const amt = tx.amt[i];
+    if (M.txYear[i] === f.year) { curMonth[M.txMonth[i]] += amt; curTotal += amt; }
+    else if (M.txYear[i] === prevYear) { prevMonth[M.txMonth[i]] += amt; prevTotal += amt; }
   }
 
-  const target = { "Target SI": 0, "Target SO": 0 };
-  const targetByBrand = {}; BRAND_ORDER.forEach(b => targetByBrand[b] = { "Target SI": 0, "Target SO": 0 });
-  for (let i = 0; i < M.T; i++) {
-    if (M.tgtYear[i] !== f.year) continue;
-    if (!monthOk(M.tgtMonth[i])) continue;
-    const regionLabel = d.reg[tgt.reg[i]], areaLabel = d.area[tgt.area[i]], kotaLabel = d.kota[tgt.kota[i]];
-    if (!pass(regionLabel, areaLabel, kotaLabel)) continue;
-    const trxLabel = d.trx[tgt.trx[i]];
-    const brandLabel = d.brand[tgt.brand[i]];
-    target[trxLabel] += tgt.amt[i];
-    if (targetByBrand[brandLabel]) targetByBrand[brandLabel][trxLabel] += tgt.amt[i];
-  }
-
-  function pack(actualVal, targetVal) {
-    const gap = actualVal - targetVal;
-    const pct = targetVal > 0 ? (actualVal / targetVal) * 100 : (actualVal > 0 ? 100 : 0);
-    return { actual: actualVal, target: targetVal, gap, pct };
-  }
-
-  const si = pack(actual["Selling In"], target["Target SI"]);
-  const so = pack(actual["Selling Out"], target["Target SO"]);
-  const brandBreakdown = BRAND_ORDER.map(b => ({
-    brand: b,
-    si: pack(actualByBrand[b]["Selling In"], targetByBrand[b]["Target SI"]),
-    so: pack(actualByBrand[b]["Selling Out"], targetByBrand[b]["Target SO"]),
-  }));
-
-  return { si, so, brandBreakdown };
+  const chartData = MONTHS.map((label, m) => ({ month: label, current: Math.round(curMonth[m]), previous: Math.round(prevMonth[m]) }));
+  const growthPct = prevTotal > 0 ? ((curTotal - prevTotal) / prevTotal) * 100 : (curTotal > 0 ? 100 : 0);
+  return { chartData, curTotal, prevTotal, growthPct, prevYear };
 }
 
 /* Insights page: top kota, top produk, channel mix, yoy trend */
@@ -685,24 +662,6 @@ function StackSegmentShape(props) {
   return <path d={path} fill={fill} />;
 }
 
-function ProgressRing({ pct, size, color }) {
-  const s = size || 88;
-  const stroke = 9;
-  const r = (s - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const clamped = Math.max(0, Math.min(pct, 100));
-  return (
-    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`}>
-      <circle cx={s/2} cy={s/2} r={r} fill="none" stroke="#EDE7F5" strokeWidth={stroke} />
-      <circle cx={s/2} cy={s/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
-        strokeDasharray={c} strokeDashoffset={c - (clamped / 100) * c}
-        strokeLinecap="round" transform={`rotate(-90 ${s/2} ${s/2})`} />
-      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" className="cbs-display"
-        fontSize={s * 0.2} fontWeight="600" fill="#241934">{pct.toFixed(0)}%</text>
-    </svg>
-  );
-}
-
 /* ============================================================
    LOGIN SCREEN
    ============================================================ */
@@ -769,7 +728,7 @@ const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "kota", label: "Performance Kota", icon: MapPin },
   { id: "produk", label: "Performance Produk", icon: Package },
-  { id: "target", label: "Achievement Target", icon: Target },
+  { id: "target", label: "Sales Growth", icon: TrendingUp },
   { id: "insight", label: "Insight", icon: Sparkles },
 ];
 
@@ -1278,83 +1237,61 @@ function ProdukPage({ M }) {
 /* ============================================================
    PAGE: ACHIEVEMENT TARGET
    ============================================================ */
-function TargetPage({ M }) {
-  const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
-  const [month, setMonth] = useState("ALL");
+function SalesGrowthPage({ M }) {
+  const growthYears = M.years.filter(y => M.years.includes(String(parseInt(y, 10) - 1)));
+  const yearOptions = growthYears.length ? growthYears : M.years;
+  const [year, setYear] = useState(yearOptions[yearOptions.length - 1] || M.years[M.years.length - 1]);
+  const [monthsSel, setMonthsSel] = useState([]);
   const [regions, setRegions] = useState([]);
   const [areas, setAreas] = useState([]);
   const [kotas, setKotas] = useState([]);
+  const [brands, setBrands] = useState([]);
 
-  const res = useMemo(() => computeAchievement(M, {
-    year, month: month === "ALL" ? "ALL" : parseInt(month, 10), regions, areas, kotas
-  }), [M, year, month, regions, areas, kotas]);
+  const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
+  const si = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling In", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
+  const so = useMemo(() => computeGrowthSeries(M, { year, months, trx: "Selling Out", regions, areas, kotas, brands }), [M, year, months, regions, areas, kotas, brands]);
 
   return (
     <div className="cbs-fadein space-y-5">
       <div className="flex flex-wrap items-center gap-2">
-        <SingleSelect label="Tahun" value={year} onChange={setYear} width={100} options={M.years.map(y => ({ value: y, label: y }))} />
-        <SingleSelect label="Bulan" value={month} onChange={setMonth} width={120}
-          options={[{ value: "ALL", label: "Semua Bulan" }, ...MONTHS.map((m, i) => ({ value: String(i), label: m }))]} />
+        <SingleSelect label="Tahun" value={year} onChange={setYear} width={110} options={yearOptions.map(y => ({ value: y, label: y }))} />
+        <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
         <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
         <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+        <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
       </div>
 
-      <div className="grid md:grid-cols-2 gap-5">
-        <AchCard title="Selling In vs Target SI" data={res.si} color="#6B5CA5" />
-        <AchCard title="Selling Out vs Target SO" data={res.so} color="#CC9B3B" />
+      <div className="flex flex-wrap gap-4">
+        <KPICard icon={ArrowUpRight} label={`Total Selling In ${year}`} value={formatIDR(si.curTotal, true)} sub={`${si.prevYear}: ${formatIDR(si.prevTotal, true)}`} accent="#7FB4E8" />
+        <KPICard icon={TrendingUp} label="Growth Selling In" value={formatPct(si.growthPct)} sub={`Dibanding tahun ${si.prevYear}`} accent="#8FD6AC" />
+        <KPICard icon={ArrowDownRight} label={`Total Selling Out ${year}`} value={formatIDR(so.curTotal, true)} sub={`${so.prevYear}: ${formatIDR(so.prevTotal, true)}`} accent="#F3A8C6" />
+        <KPICard icon={TrendingUp} label="Growth Selling Out" value={formatPct(so.growthPct)} sub={`Dibanding tahun ${so.prevYear}`} accent="#B6A4EA" />
       </div>
 
-      <div>
-        <div className="cbs-display text-lg mb-3" style={{ color: "#241934" }}>Breakdown per Brand</div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {res.brandBreakdown.map(b => (
-            <div key={b.brand} className="cbs-card p-4">
-              <div className="text-sm font-semibold mb-3" style={{ color: BRAND_COLORS[b.brand] }}>{b.brand}</div>
-              <BrandMiniRow label="SI" pack={b.si} />
-              <BrandMiniRow label="SO" pack={b.so} />
-            </div>
-          ))}
-        </div>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <GrowthChartCard title="Selling In" subtitle={`Perbandingan ${si.prevYear} vs ${year}, Jan–Des`} data={si.chartData} prevYear={si.prevYear} year={year} currentColor="#7FB4E8" />
+        <GrowthChartCard title="Selling Out" subtitle={`Perbandingan ${so.prevYear} vs ${year}, Jan–Des`} data={so.chartData} prevYear={so.prevYear} year={year} currentColor="#F3A8C6" />
       </div>
     </div>
   );
 }
 
-function BrandMiniRow({ label, pack }) {
-  const color = pack.pct >= 100 ? "#2E7873" : pack.pct >= 80 ? "#CC9B3B" : "#C0596B";
+function GrowthChartCard({ title, subtitle, data, prevYear, year, currentColor }) {
   return (
-    <div className="flex items-center justify-between py-1.5 border-t" style={{ borderColor: "#F1ECFA" }}>
-      <div>
-        <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{label}</div>
-        <div className="text-xs font-medium tabular-nums">{formatIDR(pack.actual, true)}</div>
-      </div>
-      <div className="text-sm font-bold tabular-nums" style={{ color }}>{formatPct(pack.pct)}</div>
-    </div>
-  );
-}
-
-function AchCard({ title, data, color }) {
-  const gapPositive = data.gap >= 0;
-  return (
-    <div className="cbs-card p-6">
-      <div className="cbs-display text-lg mb-4" style={{ color: "#241934" }}>{title}</div>
-      <div className="flex items-center gap-6 flex-wrap">
-        <ProgressRing pct={data.pct} size={104} color={data.pct >= 100 ? "#2E7873" : color} />
-        <div className="flex-1 min-w-[180px] space-y-2">
-          <Row label="Pencapaian" value={formatIDR(data.actual, true)} bold />
-          <Row label="Target" value={formatIDR(data.target, true)} />
-          <Row label="Gap vs Target" value={(gapPositive ? "+" : "") + formatIDR(data.gap, true)} color={gapPositive ? "#2E7873" : "#C0596B"} />
-        </div>
-      </div>
-    </div>
-  );
-}
-function Row({ label, value, bold, color }) {
-  return (
-    <div className="flex items-center justify-between text-sm">
-      <span style={{ color: "#8A7FA0" }}>{label}</span>
-      <span style={{ fontWeight: bold ? 700 : 500, color: color || "#241934" }} className="tabular-nums">{value}</span>
+    <div className="cbs-card p-5">
+      <div className="mb-1 cbs-display text-lg" style={{ color: "#241934" }}>{title}</div>
+      <div className="text-xs mb-4" style={{ color: "#8A7FA0" }}>{subtitle}</div>
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart data={data} margin={{ top: 10, right: 4, left: 0, bottom: 0 }} barGap={4} barCategoryGap="30%">
+          <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#8A7FA0" }} axisLine={{ stroke: "#EDE7F5" }} tickLine={false} />
+          <YAxis hide tick={false} axisLine={false} tickLine={false} width={0} />
+          <Tooltip formatter={(v, name) => [formatIDR(v), name]} contentStyle={{ borderRadius: 12, border: "1px solid #EDE7F5", fontSize: 12 }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar dataKey="previous" name={prevYear} fill="#D8D3E8" radius={[6, 6, 0, 0]} />
+          <Bar dataKey="current" name={String(year)} fill={currentColor} radius={[6, 6, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -1633,7 +1570,7 @@ export default function App() {
           {page === "dashboard" && <DashboardPage M={M} />}
           {page === "kota" && <KotaPage M={M} />}
           {page === "produk" && <ProdukPage M={M} />}
-          {page === "target" && <TargetPage M={M} />}
+          {page === "target" && <SalesGrowthPage M={M} />}
           {page === "insight" && <InsightPage M={M} />}
           {page === "upload" && user.role === "admin" && <UploadPage onDataLoaded={handleDataLoaded} dataMeta={dataMeta} />}
         </div>
