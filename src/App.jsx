@@ -59,8 +59,8 @@ const REGION_COLORS = {
 };
 
 const USERS = {
-  admin: { password: "admin123", role: "admin", name: "Admin CBS" },
-  view:  { password: "view123",  role: "view",  name: "Sales Viewer" },
+  dataanalyst: { password: "aalalawiyah", role: "admin", name: "Ozi Fauzi" },
+  cbsempurna:  { password: "cbsempurna123",  role: "view",  name: "PT. Cahaya Bintang Sempurna" },
 };
 
 /* ============================================================
