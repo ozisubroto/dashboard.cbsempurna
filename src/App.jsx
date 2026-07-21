@@ -138,6 +138,26 @@ function buildModel(RAW) {
   const areas = d.area.slice().sort();
   const kotas = d.kota.slice().sort();
 
+  // Cascading filter relationships: Region -> Areas, Region -> Kotas, Area -> Kotas
+  const regionAreaMap = {}, regionKotaMap = {}, areaKotaMap = {};
+  function addRel(map, key, val) {
+    if (!map[key]) map[key] = new Set();
+    map[key].add(val);
+  }
+  const tx = RAW.tx, tgt = RAW.tgt;
+  for (let i = 0; i < N; i++) {
+    const r = d.reg[tx.reg[i]], a = d.area[tx.area[i]], k = d.kota[tx.kota[i]];
+    addRel(regionAreaMap, r, a);
+    addRel(regionKotaMap, r, k);
+    addRel(areaKotaMap, a, k);
+  }
+  for (let i = 0; i < T; i++) {
+    const r = d.reg[tgt.reg[i]], a = d.area[tgt.area[i]], k = d.kota[tgt.kota[i]];
+    addRel(regionAreaMap, r, a);
+    addRel(regionKotaMap, r, k);
+    addRel(areaKotaMap, a, k);
+  }
+
   function chanelOfRegionIdx(ri) {
     return d.reg[ri] === "Online" ? "Online" : "Offline";
   }
@@ -145,10 +165,64 @@ function buildModel(RAW) {
   return {
     RAW, d, N, T, txYear, txMonth, tgtYear, tgtMonth,
     years, regions, brands, kategoris, areas, kotas, chanelOfRegionIdx,
+    regionAreaMap, regionKotaMap, areaKotaMap,
   };
 }
 
 function inSet(set, val) { return !set || set.length === 0 || set.includes(val); }
+
+/* Cascading Region -> Area -> Kota filter state, shared across all pages.
+   Selecting a Region narrows the Area/Kota options (and vice versa for Area -> Kota);
+   stale selections that fall outside the narrowed options are pruned automatically. */
+function useCascadingLocationFilters(M) {
+  const [regions, setRegionsRaw] = useState([]);
+  const [areas, setAreasRaw] = useState([]);
+  const [kotas, setKotasRaw] = useState([]);
+
+  const areaOptions = useMemo(() => {
+    if (!regions.length) return M.areas;
+    const allowed = new Set();
+    regions.forEach(r => (M.regionAreaMap[r] || []).forEach(a => allowed.add(a)));
+    return M.areas.filter(a => allowed.has(a));
+  }, [M, regions]);
+
+  const kotaOptions = useMemo(() => {
+    if (areas.length) {
+      const allowed = new Set();
+      areas.forEach(a => (M.areaKotaMap[a] || []).forEach(k => allowed.add(k)));
+      return M.kotas.filter(k => allowed.has(k));
+    }
+    if (regions.length) {
+      const allowed = new Set();
+      regions.forEach(r => (M.regionKotaMap[r] || []).forEach(k => allowed.add(k)));
+      return M.kotas.filter(k => allowed.has(k));
+    }
+    return M.kotas;
+  }, [M, regions, areas]);
+
+  function setRegions(next) {
+    setRegionsRaw(next);
+    if (next.length) {
+      const allowedAreas = new Set();
+      next.forEach(r => (M.regionAreaMap[r] || []).forEach(a => allowedAreas.add(a)));
+      setAreasRaw(prev => prev.filter(a => allowedAreas.has(a)));
+      const allowedKotas = new Set();
+      next.forEach(r => (M.regionKotaMap[r] || []).forEach(k => allowedKotas.add(k)));
+      setKotasRaw(prev => prev.filter(k => allowedKotas.has(k)));
+    }
+  }
+  function setAreas(next) {
+    setAreasRaw(next);
+    if (next.length) {
+      const allowedKotas = new Set();
+      next.forEach(a => (M.areaKotaMap[a] || []).forEach(k => allowedKotas.add(k)));
+      setKotasRaw(prev => prev.filter(k => allowedKotas.has(k)));
+    }
+  }
+  function setKotas(next) { setKotasRaw(next); }
+
+  return { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions };
+}
 
 /* Dashboard: monthly stacked-by-brand series for SI or SO */
 function computeDashboardSeries(M, f) {
@@ -839,9 +913,7 @@ function MobileNav({ page, setPage, user, onLogout }) {
 function DashboardPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
   const [monthsSel, setMonthsSel] = useState([]);
-  const [regions, setRegions] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [kotas, setKotas] = useState([]);
+  const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
   const [brands, setBrands] = useState([]);
   const [groupBy, setGroupBy] = useState("brand");
 
@@ -864,8 +936,8 @@ function DashboardPage({ M }) {
           options={M.years.map(y => ({ value: y, label: y }))} />
         <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
-        <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
-        <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+        <MultiSelect label="Area" options={areaOptions} value={areas} onChange={setAreas} width={150} />
+        <MultiSelect label="Kota" options={kotaOptions} value={kotas} onChange={setKotas} width={170} />
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
       </div>
 
@@ -1140,9 +1212,7 @@ function KotaPage({ M }) {
 function ProdukPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
   const [trx, setTrx] = useState("Selling Out");
-  const [regions, setRegions] = useState([]);
-  const [kotas, setKotas] = useState([]);
-  const [areas, setAreas] = useState([]);
+  const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
   const [kategoris, setKategoris] = useState([]);
   const [brands, setBrands] = useState([]);
   const [metric, setMetric] = useState("amt");
@@ -1189,8 +1259,8 @@ function ProdukPage({ M }) {
         <SingleSelect label="Kategori Trx" value={trx} onChange={setTrx} width={145}
           options={[{ value: "Selling Out", label: "Selling Out" }, { value: "Selling In", label: "Selling In" }]} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={135} />
-        <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={145} />
-        <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={135} />
+        <MultiSelect label="Kota" options={kotaOptions} value={kotas} onChange={setKotas} width={145} />
+        <MultiSelect label="Area" options={areaOptions} value={areas} onChange={setAreas} width={135} />
         <MultiSelect label="Kategori" options={M.kategoris} value={kategoris} onChange={setKategoris} width={145} />
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={155} />
         <SingleSelect label="Metrik" value={metric} onChange={setMetric} width={100}
@@ -1264,9 +1334,7 @@ function SalesGrowthPage({ M }) {
   const yearOptions = growthYears.length ? growthYears : M.years;
   const [year, setYear] = useState(yearOptions[yearOptions.length - 1] || M.years[M.years.length - 1]);
   const [monthsSel, setMonthsSel] = useState([]);
-  const [regions, setRegions] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [kotas, setKotas] = useState([]);
+  const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
   const [brands, setBrands] = useState([]);
   const [groupBy, setGroupBy] = useState("brand");
 
@@ -1282,8 +1350,8 @@ function SalesGrowthPage({ M }) {
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={110} options={yearOptions.map(y => ({ value: y, label: y }))} />
         <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
-        <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
-        <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+        <MultiSelect label="Area" options={areaOptions} value={areas} onChange={setAreas} width={150} />
+        <MultiSelect label="Kota" options={kotaOptions} value={kotas} onChange={setKotas} width={170} />
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
       </div>
 
@@ -1367,9 +1435,7 @@ function GrowthChartCard({ title, subtitle, data, series, colorMap, prevYear, ye
 function InsightPage({ M }) {
   const [year, setYear] = useState(M.years[M.years.length - 2] || M.years[0]);
   const [monthsSel, setMonthsSel] = useState([]);
-  const [regions, setRegions] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [kotas, setKotas] = useState([]);
+  const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
   const [brands, setBrands] = useState([]);
 
   const months = useMemo(() => monthsSel.map(m => MONTHS.indexOf(m)), [monthsSel]);
@@ -1381,8 +1447,8 @@ function InsightPage({ M }) {
         <SingleSelect label="Tahun" value={year} onChange={setYear} width={110} options={M.years.map(y => ({ value: y, label: y }))} />
         <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
         <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
-        <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
-        <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+        <MultiSelect label="Area" options={areaOptions} value={areas} onChange={setAreas} width={150} />
+        <MultiSelect label="Kota" options={kotaOptions} value={kotas} onChange={setKotas} width={170} />
         <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
       </div>
 
@@ -1680,9 +1746,7 @@ async function generateReportPptx(M, f, onProgress) {
 
 function ReportingPage({ M }) {
   const [monthsSel, setMonthsSel] = useState([]);
-  const [regions, setRegions] = useState([]);
-  const [areas, setAreas] = useState([]);
-  const [kotas, setKotas] = useState([]);
+  const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
   const [brands, setBrands] = useState([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
@@ -1717,8 +1781,8 @@ function ReportingPage({ M }) {
         <div className="flex flex-wrap items-center gap-2 mt-5">
           <MultiSelect label="Bulan" options={MONTHS} value={monthsSel} onChange={setMonthsSel} width={150} />
           <MultiSelect label="Region" options={M.regions} value={regions} onChange={setRegions} width={150} />
-          <MultiSelect label="Area" options={M.areas} value={areas} onChange={setAreas} width={150} />
-          <MultiSelect label="Kota" options={M.kotas} value={kotas} onChange={setKotas} width={170} />
+          <MultiSelect label="Area" options={areaOptions} value={areas} onChange={setAreas} width={150} />
+          <MultiSelect label="Kota" options={kotaOptions} value={kotas} onChange={setKotas} width={170} />
           <MultiSelect label="Brand" options={M.brands} value={brands} onChange={setBrands} width={170} />
         </div>
 
