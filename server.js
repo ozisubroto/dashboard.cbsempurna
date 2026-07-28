@@ -214,6 +214,84 @@ function toolGetProdukBulanDetail({ produk, bulan, tahun, trx }) {
   };
 }
 
+/* Tool 4: ranking kota (opsional difilter per region) berdasarkan besarnya
+   kenaikan/penurunan dibanding bulan sebelumnya, lengkap produk pendorong
+   tiap kota. Ini menjawab pertanyaan seperti "kota mana yang paling turun
+   di region Central" secara presisi dan sudah difilter arah perubahannya -
+   bukan tebakan dari nama kota di percakapan sebelumnya. */
+function toolGetKotaRankingPerubahan({ region, trx, tahun, bulan, arah, top_n }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const trxLabel = /out/i.test(trx) ? "Selling Out" : "Selling In";
+  const trxIdx = d.trx.indexOf(trxLabel);
+  const regionIdx = region ? findIndexLoose(d.reg, region) : -1;
+  if (region && regionIdx === -1) return { error: `Region "${region}" tidak ditemukan.` };
+
+  const bulanNum = Math.max(1, Math.min(12, parseInt(bulan, 10) || 1));
+  const targetYm = `${tahun}-${String(bulanNum).padStart(2, "0")}`;
+  let prevYear = parseInt(tahun, 10), prevMonth = bulanNum - 1;
+  if (prevMonth < 1) { prevMonth = 12; prevYear -= 1; }
+  const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+  const targetYmIdx = d.ym.indexOf(targetYm);
+  const prevYmIdx = d.ym.indexOf(prevYm);
+  if (targetYmIdx === -1) return { error: `Bulan ${targetYm} tidak ada di data.` };
+
+  const tx = raw.tx;
+  const curByKota = new Map(), prevByKota = new Map();
+  const curProdByKota = new Map(), prevProdByKota = new Map();
+
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (regionIdx !== -1 && tx.reg[i] !== regionIdx) continue;
+    const isCur = tx.ym[i] === targetYmIdx;
+    const isPrev = tx.ym[i] === prevYmIdx;
+    if (!isCur && !isPrev) continue;
+    const kotaLabel = d.kota[tx.kota[i]];
+    const prodLabel = d.prod[tx.prod[i]];
+    const byKota = isCur ? curByKota : prevByKota;
+    const prodByKota = isCur ? curProdByKota : prevProdByKota;
+    byKota.set(kotaLabel, (byKota.get(kotaLabel) || 0) + tx.amt[i]);
+    if (!prodByKota.has(kotaLabel)) prodByKota.set(kotaLabel, new Map());
+    const m = prodByKota.get(kotaLabel);
+    m.set(prodLabel, (m.get(prodLabel) || 0) + tx.amt[i]);
+  }
+
+  const allKota = new Set([...curByKota.keys(), ...prevByKota.keys()]);
+  let list = Array.from(allKota).map(kota => {
+    const cur = curByKota.get(kota) || 0, prev = prevByKota.get(kota) || 0;
+    const delta = cur - prev;
+    const deltaPersen = prev > 0 ? (delta / prev) * 100 : (cur > 0 ? 100 : 0);
+    return { kota, bulan_ini: Math.round(cur), bulan_lalu: Math.round(prev), perubahan: Math.round(delta), perubahan_persen: +deltaPersen.toFixed(1) };
+  });
+
+  if (arah === "turun") list = list.filter(k => k.perubahan < 0).sort((a, b) => a.perubahan - b.perubahan);
+  else if (arah === "naik") list = list.filter(k => k.perubahan > 0).sort((a, b) => b.perubahan - a.perubahan);
+  else list.sort((a, b) => Math.abs(b.perubahan) - Math.abs(a.perubahan));
+
+  const n = Math.max(1, Math.min(10, parseInt(top_n, 10) || 5));
+  list = list.slice(0, n).map(item => {
+    const curMap = curProdByKota.get(item.kota) || new Map();
+    const prevMap = prevProdByKota.get(item.kota) || new Map();
+    const allProd = new Set([...curMap.keys(), ...prevMap.keys()]);
+    const drivers = Array.from(allProd).map(p => {
+      const c = curMap.get(p) || 0, pv = prevMap.get(p) || 0;
+      return { produk: p, perubahan: Math.round(c - pv) };
+    }).sort((a, b) => Math.abs(b.perubahan) - Math.abs(a.perubahan)).slice(0, 3);
+    return { ...item, produk_pendorong: drivers };
+  });
+
+  if (list.length === 0) return { info: "Tidak ada kota yang cocok dengan filter arah perubahan ini pada periode tersebut.", kota: [] };
+
+  return {
+    kategori_trx: trxLabel,
+    region: region || "semua region",
+    bulan_ini: `${MONTH_NAMES[bulanNum - 1]} ${tahun}`,
+    bulan_lalu: prevYmIdx === -1 ? null : `${MONTH_NAMES[prevMonth - 1]} ${prevYear}`,
+    arah_filter: arah || "semua",
+    kota: list,
+  };
+}
+
 /* Tool 3: total presisi untuk satu rentang bulan (mis. YTD Jan-Mei), opsional
    difilter per region dan/atau brand. Dihitung persis di server (bukan
    dijumlahkan oleh model AI) supaya tidak salah hitung. */
@@ -258,6 +336,25 @@ function toolGetPeriodeTotal({ trx, tahun, bulan_awal, bulan_akhir, region, bran
 }
 
 const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "get_kota_ranking_perubahan",
+      description: "Ranking kota (opsional difilter dalam satu region tertentu) berdasarkan besarnya PERUBAHAN (naik atau turun) dibanding bulan sebelumnya, lengkap produk pendorong tiap kota. WAJIB pakai tool ini untuk pertanyaan seperti 'kota mana yang paling turun/naik di region X' - JANGAN menebak nama kota dari percakapan sebelumnya, dan JANGAN campur kota dari region lain. Kalau user cuma minta yang turun, isi arah='turun' supaya kota yang naik tidak ikut disebutkan.",
+      parameters: {
+        type: "object",
+        properties: {
+          region: { type: "string", description: "Opsional: nama region (Central/East/West/MT/HO/Online) untuk memfilter kota. Kosongkan untuk semua region." },
+          trx: { type: "string", enum: ["Selling In", "Selling Out"] },
+          tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
+          bulan: { type: "integer", description: "Bulan yang ditanyakan, 1-12" },
+          arah: { type: "string", enum: ["turun", "naik", "semua"], description: "'turun' = hanya kota yang mengalami penurunan, 'naik' = hanya yang naik, 'semua' = ranking berdasar besar perubahan tanpa peduli arah" },
+          top_n: { type: "integer", description: "Jumlah kota yang ingin ditampilkan, default 5" },
+        },
+        required: ["trx", "tahun", "bulan", "arah"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -315,6 +412,7 @@ const TOOLS = [
 
 function runTool(name, args) {
   try {
+    if (name === "get_kota_ranking_perubahan") return toolGetKotaRankingPerubahan(args);
     if (name === "get_periode_total") return toolGetPeriodeTotal(args);
     if (name === "get_kota_bulan_detail") return toolGetKotaBulanDetail(args);
     if (name === "get_produk_bulan_detail") return toolGetProdukBulanDetail(args);
@@ -329,9 +427,10 @@ const SYSTEM_PROMPT = `Kamu adalah "CBS Sales Assistant", asisten analisis data 
 Kamu diberi ringkasan data nasional (JSON di dalam tag <data>): total per brand/region, per bulan, dan top 5 kota/produk. Ringkasan ini HANYA untuk konteks/gambaran umum (misal tren naik/turun) - JANGAN PERNAH menjumlahkan atau mengurangi angka dari ringkasan itu sendiri untuk menjawab pertanyaan soal total/YTD/rentang bulan, karena rawan salah hitung.
 
 ATURAN WAJIB soal angka:
-- Untuk PERTANYAAN APA PUN yang butuh total angka (per bulan, YTD, rentang bulan, per region, per brand, per kota, per produk), SELALU panggil tool yang sesuai (get_periode_total, get_kota_bulan_detail, atau get_produk_bulan_detail) untuk mendapat angka pasti. Jangan pernah menghitung sendiri dari ringkasan data.
-- Untuk membandingkan dua periode/tahun, panggil tool tersebut sekali untuk masing-masing periode.
-- Jangan pernah mengarang angka yang tidak ada di hasil tool/data. Kalau tool mengembalikan error (kota/produk/bulan tidak ditemukan), sampaikan itu apa adanya ke user.
+- Untuk PERTANYAAN APA PUN yang butuh total angka (per bulan, YTD, rentang bulan, per region, per brand, per kota, per produk), SELALU panggil tool yang sesuai untuk mendapat angka pasti. Jangan pernah menghitung sendiri dari ringkasan data.
+- Untuk pertanyaan "kota/produk mana yang paling naik/turun" (dalam satu region atau secara umum), SELALU pakai get_kota_ranking_perubahan dengan parameter "arah" yang sesuai (turun/naik/semua) - JANGAN pernah menjawab dari nama kota yang kebetulan disebut di percakapan sebelumnya, karena kota itu belum tentu relevan/termasuk region yang ditanyakan sekarang. Setiap pertanyaan baru soal ranking kota/region harus dijawab dengan memanggil tool lagi, bukan mengambil dari jawaban giliran sebelumnya.
+- Untuk membandingkan dua periode/tahun, panggil tool yang sesuai sekali untuk masing-masing periode.
+- Jangan pernah mengarang angka atau nama kota/produk yang tidak ada di hasil tool/data. Kalau tool mengembalikan error atau daftar kosong, sampaikan itu apa adanya ke user.
 
 Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.`;
 
