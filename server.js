@@ -214,7 +214,69 @@ function toolGetProdukBulanDetail({ produk, bulan, tahun, trx }) {
   };
 }
 
+/* Tool 3: total presisi untuk satu rentang bulan (mis. YTD Jan-Mei), opsional
+   difilter per region dan/atau brand. Dihitung persis di server (bukan
+   dijumlahkan oleh model AI) supaya tidak salah hitung. */
+function toolGetPeriodeTotal({ trx, tahun, bulan_awal, bulan_akhir, region, brand }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const trxLabel = /out/i.test(trx) ? "Selling Out" : "Selling In";
+  const trxIdx = d.trx.indexOf(trxLabel);
+  const bStart = Math.max(1, Math.min(12, parseInt(bulan_awal, 10) || 1));
+  const bEnd = Math.max(bStart, Math.min(12, parseInt(bulan_akhir, 10) || 12));
+
+  const validYmIdx = new Set();
+  for (let m = bStart; m <= bEnd; m++) {
+    const idx = d.ym.indexOf(`${tahun}-${String(m).padStart(2, "0")}`);
+    if (idx !== -1) validYmIdx.add(idx);
+  }
+  const regionIdx = region ? findIndexLoose(d.reg, region) : -1;
+  if (region && regionIdx === -1) return { error: `Region "${region}" tidak ditemukan.` };
+
+  const tx = raw.tx;
+  let total = 0, qty = 0;
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (!validYmIdx.has(tx.ym[i])) continue;
+    if (regionIdx !== -1 && tx.reg[i] !== regionIdx) continue;
+    if (brand) {
+      const brandLabel = d.brand[raw.prodMeta.brand[tx.prod[i]]];
+      if (!brandLabel.toLowerCase().includes(String(brand).toLowerCase())) continue;
+    }
+    total += tx.amt[i];
+    qty += tx.qty[i];
+  }
+  return {
+    kategori_trx: trxLabel,
+    tahun,
+    rentang_bulan: bStart === bEnd ? MONTH_NAMES[bStart - 1] : `${MONTH_NAMES[bStart - 1]}-${MONTH_NAMES[bEnd - 1]}`,
+    filter_region: region || "semua region",
+    filter_brand: brand || "semua brand",
+    total_value: Math.round(total),
+    total_qty: Math.round(qty),
+  };
+}
+
 const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "get_periode_total",
+      description: "Hitung total value & qty secara PRESISI untuk satu rentang bulan (misalnya YTD Jan-Mei, atau 1 bulan saja), opsional difilter per region dan/atau brand. WAJIB pakai tool ini untuk pertanyaan soal total/YTD/rentang periode - JANGAN menjumlahkan sendiri dari data ringkasan bulanan karena rawan salah hitung. Untuk membandingkan 2 tahun, panggil tool ini 2 kali (sekali per tahun).",
+      parameters: {
+        type: "object",
+        properties: {
+          trx: { type: "string", enum: ["Selling In", "Selling Out"], description: "Kategori transaksi" },
+          tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
+          bulan_awal: { type: "integer", description: "Bulan awal rentang, 1-12" },
+          bulan_akhir: { type: "integer", description: "Bulan akhir rentang, 1-12 (isi sama dengan bulan_awal kalau cuma 1 bulan)" },
+          region: { type: "string", description: "Opsional: nama region (Central/East/West/MT/HO/Online) untuk memfilter. Kosongkan untuk semua region." },
+          brand: { type: "string", description: "Opsional: nama brand untuk memfilter. Kosongkan untuk semua brand." },
+        },
+        required: ["trx", "tahun", "bulan_awal", "bulan_akhir"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -253,6 +315,7 @@ const TOOLS = [
 
 function runTool(name, args) {
   try {
+    if (name === "get_periode_total") return toolGetPeriodeTotal(args);
     if (name === "get_kota_bulan_detail") return toolGetKotaBulanDetail(args);
     if (name === "get_produk_bulan_detail") return toolGetProdukBulanDetail(args);
     return { error: "Tool tidak dikenali: " + name };
@@ -263,8 +326,13 @@ function runTool(name, args) {
 
 const SYSTEM_PROMPT = `Kamu adalah "CBS Sales Assistant", asisten analisis data untuk dashboard penjualan PT. Cahaya Bintang Sempurna (distributor produk kecantikan: Bioaqua, Kojiesan, My BestFriend, Nature Dradiance).
 
-Kamu diberi ringkasan data nasional (JSON di dalam tag <data>): total per brand/region, per bulan, dan top 5 kota/produk. Untuk pertanyaan yang lebih spesifik (satu kota tertentu di satu bulan tertentu, satu produk tertentu, atau analisis penyebab kenaikan/penurunan), PANGGIL tool yang tersedia untuk mengambil datanya - jangan menebak dari ringkasan saja kalau tool bisa memberi jawaban lebih akurat.
-Jangan pernah mengarang angka yang tidak ada di data. Kalau tool mengembalikan error (kota/produk/bulan tidak ditemukan), sampaikan itu apa adanya ke user.
+Kamu diberi ringkasan data nasional (JSON di dalam tag <data>): total per brand/region, per bulan, dan top 5 kota/produk. Ringkasan ini HANYA untuk konteks/gambaran umum (misal tren naik/turun) - JANGAN PERNAH menjumlahkan atau mengurangi angka dari ringkasan itu sendiri untuk menjawab pertanyaan soal total/YTD/rentang bulan, karena rawan salah hitung.
+
+ATURAN WAJIB soal angka:
+- Untuk PERTANYAAN APA PUN yang butuh total angka (per bulan, YTD, rentang bulan, per region, per brand, per kota, per produk), SELALU panggil tool yang sesuai (get_periode_total, get_kota_bulan_detail, atau get_produk_bulan_detail) untuk mendapat angka pasti. Jangan pernah menghitung sendiri dari ringkasan data.
+- Untuk membandingkan dua periode/tahun, panggil tool tersebut sekali untuk masing-masing periode.
+- Jangan pernah mengarang angka yang tidak ada di hasil tool/data. Kalau tool mengembalikan error (kota/produk/bulan tidak ditemukan), sampaikan itu apa adanya ke user.
+
 Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.`;
 
 async function callGroq(messages, tools) {
