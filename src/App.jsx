@@ -1744,6 +1744,147 @@ async function generateReportPptx(M, f, onProgress) {
   await pptx.writeFile({ fileName: `Sales_Report_${monthLabel.replace(/[, ]+/g, "-")}_${year}.pptx` });
 }
 
+/* ============================================================
+   AI AGENT (floating chat widget)
+   Builds a small, filter-free national summary from the already
+   in-memory data (reusing the same aggregation functions the
+   rest of the app uses) and sends it, together with the user's
+   question, to the server's /api/ai/chat proxy.
+   ============================================================ */
+function buildAiContext(M) {
+  const year = M.years[M.years.length - 1];
+  const f = { year, months: [], regions: [], areas: [], kotas: [], brands: [] };
+
+  const siBrand = computeDashboardSeries(M, { ...f, trx: "Selling In", groupBy: "brand" });
+  const soBrand = computeDashboardSeries(M, { ...f, trx: "Selling Out", groupBy: "brand" });
+  const siRegion = computeDashboardSeries(M, { ...f, trx: "Selling In", groupBy: "region" });
+  const soRegion = computeDashboardSeries(M, { ...f, trx: "Selling Out", groupBy: "region" });
+  const targetSI = computeYearTarget(M, { ...f, trx: "Target SI" });
+  const targetSO = computeYearTarget(M, { ...f, trx: "Target SO" });
+  const growthSI = computeGrowthSeries(M, { ...f, trx: "Selling In", groupBy: "brand" });
+  const growthSO = computeGrowthSeries(M, { ...f, trx: "Selling Out", groupBy: "brand" });
+  const ins = computeInsights(M, f);
+
+  function byKeyTotals(series) {
+    const out = {};
+    series.activeBrands.forEach(k => { out[k] = Math.round(series.chartData.reduce((s, r) => s + (r[k] || 0), 0)); });
+    return out;
+  }
+
+  return {
+    tahun: year,
+    tahun_pembanding: growthSI.prevYear,
+    selling_in: {
+      total: Math.round(siBrand.total),
+      target: Math.round(targetSI),
+      pencapaian_persen: targetSI > 0 ? +((siBrand.total / targetSI) * 100).toFixed(1) : null,
+      growth_persen_vs_tahun_lalu: +growthSI.growthPct.toFixed(1),
+      per_brand: byKeyTotals(siBrand),
+      per_region: byKeyTotals(siRegion),
+    },
+    selling_out: {
+      total: Math.round(soBrand.total),
+      target: Math.round(targetSO),
+      pencapaian_persen: targetSO > 0 ? +((soBrand.total / targetSO) * 100).toFixed(1) : null,
+      growth_persen_vs_tahun_lalu: +growthSO.growthPct.toFixed(1),
+      per_brand: byKeyTotals(soBrand),
+      per_region: byKeyTotals(soRegion),
+    },
+    top_5_kota_selling_out: ins.topKotaSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
+    top_5_produk_selling_out: ins.topProdukSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
+  };
+}
+
+const AI_SUGGESTIONS = [
+  "Bagaimana pencapaian Selling In tahun ini?",
+  "Brand mana yang paling turun?",
+  "Kota mana kontribusi terbesar?",
+];
+
+function AIChatWidget({ M }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, open, busy]);
+
+  async function send(text) {
+    const q = (text !== undefined ? text : input).trim();
+    if (!q || busy) return;
+    setInput(""); setError(null);
+    const nextMessages = [...messages, { role: "user", content: q }];
+    setMessages(nextMessages);
+    setBusy(true);
+    try {
+      const context = buildAiContext(M);
+      const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, context, history }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Gagal mendapat jawaban.");
+      setMessages(m => [...m, { role: "assistant", content: data.answer }]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button onClick={() => setOpen(o => !o)} title="AI Sales Assistant"
+        className="fixed z-40 rounded-full flex items-center justify-center"
+        style={{ bottom: 22, right: 22, width: 54, height: 54, background: "linear-gradient(135deg,#7FB4E8,#B6A4EA)", boxShadow: "0 10px 28px -6px rgba(127,180,232,0.55)" }}>
+        {open ? <X size={22} color="#fff" /> : <Sparkles size={22} color="#fff" />}
+      </button>
+      {open && (
+        <div className="fixed z-40 flex flex-col rounded-2xl overflow-hidden cbs-fadein"
+          style={{ bottom: 86, right: 22, width: 340, maxWidth: "calc(100vw - 32px)", height: 460, background: "#fff", boxShadow: "0 20px 50px -12px rgba(36,25,52,0.35)", border: "1px solid #EDE7F5" }}>
+          <div className="px-4 py-3" style={{ background: "linear-gradient(135deg,#2E2049,#5F72A8)" }}>
+            <div className="text-white text-sm font-semibold">✨ CBS Sales Assistant</div>
+            <div className="text-[10px]" style={{ color: "#C9C3DE" }}>Tanya seputar data penjualan Anda</div>
+          </div>
+          <div ref={scrollRef} className="flex-1 overflow-y-auto cbs-scroll px-3 py-3 space-y-2">
+            {messages.length === 0 && (
+              <div className="text-xs" style={{ color: "#8A7FA0" }}>
+                Contoh pertanyaan:
+                <div className="flex flex-col gap-1.5 mt-2">
+                  {AI_SUGGESTIONS.map(s => (
+                    <button key={s} onClick={() => send(s)} className="text-left px-2.5 py-1.5 rounded-lg text-xs" style={{ background: "#F7F5FA", color: "#241934" }}>{s}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className="text-xs rounded-xl px-3 py-2"
+                style={{ background: m.role === "user" ? "#241934" : "#F1ECFA", color: m.role === "user" ? "#fff" : "#241934", whiteSpace: "pre-wrap", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0 }}>
+                {m.content}
+              </div>
+            ))}
+            {busy && <div className="text-xs" style={{ color: "#8A7FA0" }}>Sedang berpikir...</div>}
+            {error && <div className="text-xs" style={{ color: "#C0596B" }}>{error}</div>}
+          </div>
+          <div className="flex items-center gap-2 px-3 py-2.5 border-t" style={{ borderColor: "#EDE7F5" }}>
+            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") send(); }}
+              placeholder="Tanya sesuatu..." className="flex-1 text-xs px-3 py-2 rounded-xl border outline-none" style={{ borderColor: "#E4DCF2" }} disabled={busy} />
+            <button onClick={() => send()} disabled={busy} className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: "#241934" }}>
+              <ArrowUpRight size={14} color="#fff" />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function ReportingPage({ M }) {
   const [monthsSel, setMonthsSel] = useState([]);
   const { regions, setRegions, areas, setAreas, kotas, setKotas, areaOptions, kotaOptions } = useCascadingLocationFilters(M);
@@ -2020,6 +2161,7 @@ export default function App() {
           {page === "upload" && user.role === "admin" && <UploadPage onDataLoaded={handleDataLoaded} dataMeta={dataMeta} />}
         </div>
       </div>
+      <AIChatWidget M={M} />
     </div>
   );
 }
