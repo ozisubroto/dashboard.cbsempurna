@@ -586,6 +586,7 @@ function computeMonitoringStock(M) {
     const nama = d.prod[p];
     const brand = d.brand[RAW.prodMeta.brand[p]];
     const kategori = d.kat[RAW.prodMeta.kat[p]];
+    if (kategori && kategori.toLowerCase() === "others") continue;
     const months = qtyByProdMonth.get(p) || [0, 0, 0];
     const sum = months.reduce((a, b) => a + b, 0);
     const avgQty = validMonthCount > 0 ? sum / validMonthCount : 0;
@@ -1658,11 +1659,24 @@ function MonitoringStockPage({ M }) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState("avgValue");
   const [sortDir, setSortDir] = useState("desc");
+  const [fKategori, setFKategori] = useState([]);
+  const [fBrand, setFBrand] = useState([]);
+  const [fStatusProduk, setFStatusProduk] = useState([]);
+  const [fStatusStock, setFStatusStock] = useState([]);
 
   function handleSort(key, dir) { setSortKey(key); setSortDir(dir); }
 
+  const kategoriOptions = useMemo(() => Array.from(new Set(data.rows.map(r => r.kategori))).sort(), [data.rows]);
+  const brandOptions = useMemo(() => Array.from(new Set(data.rows.map(r => r.brand))).sort(), [data.rows]);
+  const statusProdukOptions = ["Fast Moving", "Slow Moving", "Erratic Moving", "Dead Moving"];
+  const statusStockOptions = ["Dead Stock", "Under Stock", "Normal Stock", "Over Stock", "Critical Over Stock"];
+
   const visibleRows = useMemo(() => {
     let arr = data.rows;
+    if (fKategori.length) arr = arr.filter(r => fKategori.includes(r.kategori));
+    if (fBrand.length) arr = arr.filter(r => fBrand.includes(r.brand));
+    if (fStatusProduk.length) arr = arr.filter(r => fStatusProduk.includes(r.statusProduk));
+    if (fStatusStock.length) arr = arr.filter(r => fStatusStock.includes(r.statusStock));
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       arr = arr.filter(r => r.nama.toLowerCase().includes(q));
@@ -1684,15 +1698,21 @@ function MonitoringStockPage({ M }) {
       return sortDir === "asc" ? va - vb : vb - va;
     });
     return arr;
-  }, [data.rows, search, sortKey, sortDir]);
+  }, [data.rows, fKategori, fBrand, fStatusProduk, fStatusStock, search, sortKey, sortDir]);
 
   return (
     <div className="cbs-fadein space-y-4">
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="relative" style={{ width: 260 }}>
-          <Search size={14} color="#8A7FA0" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama produk..."
-            className="w-full pl-8 pr-3 py-2 rounded-xl border text-sm" style={{ borderColor: "#E4DCF2" }} />
+        <div className="flex flex-wrap items-center gap-2">
+          <MultiSelect label="Kategori" options={kategoriOptions} value={fKategori} onChange={setFKategori} width={160} />
+          <MultiSelect label="Brand" options={brandOptions} value={fBrand} onChange={setFBrand} width={150} />
+          <MultiSelect label="Kategori Produk" options={statusProdukOptions} value={fStatusProduk} onChange={setFStatusProduk} width={180} />
+          <MultiSelect label="Status Stock" options={statusStockOptions} value={fStatusStock} onChange={setFStatusStock} width={170} />
+          <div className="relative" style={{ width: 240 }}>
+            <Search size={14} color="#8A7FA0" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama produk..."
+              className="w-full pl-8 pr-3 py-2 rounded-xl border text-sm" style={{ borderColor: "#E4DCF2" }} />
+          </div>
         </div>
         <div className="text-sm" style={{ color: "#6E6480" }}>
           {visibleRows.length} produk · Selling In {data.monthLabels.join(" - ")}
@@ -1733,12 +1753,13 @@ function MonitoringStockPage({ M }) {
             <tbody>
               {visibleRows.map((r, i) => {
                 const rowBg = i % 2 ? "#FCFBFE" : "#fff";
+                const namaDisplay = r.nama.length > 50 ? r.nama.slice(0, 50) + "…" : r.nama;
                 return (
                   <tr key={r.id} style={{ borderTop: "1px solid #F1ECFA", background: rowBg }}>
                     <td className="cbs-sticky-col text-center px-2 py-1.5" style={{ background: rowBg, width: 40 }}>{i + 1}</td>
                     <td className="cbs-sticky-col px-3 py-1.5" style={{ background: rowBg, left: 40 }} title={r.nama}>
                       <span className="inline-block rounded-full mr-1.5" style={{ width: 6, height: 6, background: BRAND_COLORS[r.brand] || "#ccc" }} />
-                      {r.nama}
+                      {namaDisplay}
                     </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{r.kategori}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{r.brand}</td>
