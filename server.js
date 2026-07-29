@@ -96,6 +96,45 @@ app.get("/api/health", (req, res) => {
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
+/* "openrouter/free" is OpenRouter's own auto-router: it picks whichever free
+   model is currently available, so this keeps working even as individual
+   free models rotate in/out. Override via env var if you want a specific one
+   (check openrouter.ai/models filtered to Price: Free for current options). */
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+/* Google AI Studio key (aistudio.google.com), free tier, no credit card.
+   Uses Gemini's official OpenAI-compatibility shim - same request/response
+   shape as OpenAI, just a different base URL. */
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+
+const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY || "";
+/* cloud.cerebras.ai, free tier (~1M tokens/day), no credit card. */
+const CEREBRAS_MODEL = process.env.CEREBRAS_MODEL || "gpt-oss-120b";
+const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
+
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || "";
+/* console.mistral.ai, free "Experiment" tier, no credit card (phone
+   verification required). Low RPM but generous monthly token pool, so it's
+   kept last in the fallback order. */
+const MISTRAL_MODEL = process.env.MISTRAL_MODEL || "mistral-small-latest";
+const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
+
+/* Tried in order until one succeeds. Only providers with an API key actually
+   configured (via environment variable) are included, so you can enable as
+   many or as few of these as you like - just set the matching *_API_KEY. */
+const PROVIDERS = [
+  { name: "groq", url: GROQ_URL, key: GROQ_API_KEY, model: GROQ_MODEL },
+  { name: "openrouter", url: OPENROUTER_URL, key: OPENROUTER_API_KEY, model: OPENROUTER_MODEL },
+  { name: "gemini", url: GEMINI_URL, key: GEMINI_API_KEY, model: GEMINI_MODEL },
+  { name: "cerebras", url: CEREBRAS_URL, key: CEREBRAS_API_KEY, model: CEREBRAS_MODEL },
+  { name: "mistral", url: MISTRAL_URL, key: MISTRAL_API_KEY, model: MISTRAL_MODEL },
+].filter(p => p.key);
+
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -569,12 +608,18 @@ ATURAN WAJIB soal angka:
 
 Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.`;
 
-async function callGroq(messages, tools) {
-  const res = await fetch(GROQ_URL, {
+async function callProvider(provider, messages, tools) {
+  const headers = { "Content-Type": "application/json", "Authorization": `Bearer ${provider.key}` };
+  if (provider.name === "openrouter") {
+    // Optional but recommended by OpenRouter for routing/analytics purposes
+    headers["HTTP-Referer"] = "https://dashboardcbsempurna.baried.my.id";
+    headers["X-Title"] = "CBS Sales Assistant";
+  }
+  const res = await fetch(provider.url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
+    headers,
     body: JSON.stringify({
-      model: GROQ_MODEL,
+      model: provider.model,
       messages,
       tools,
       tool_choice: tools ? "auto" : undefined,
@@ -584,21 +629,43 @@ async function callGroq(messages, tools) {
   });
   const data = await res.json();
   if (!res.ok) {
-    const msg = data.error?.message || "Groq API mengembalikan error.";
+    const msg = data.error?.message || data.error?.status || `${provider.name} API mengembalikan error.`;
     const err = new Error(msg);
     err.status = res.status;
+    err.provider = provider.name;
     throw err;
   }
   return data;
+}
+
+/* Tries each configured provider in order (Groq -> OpenRouter -> Gemini ->
+   Cerebras -> Mistral) until one responds successfully. Whichever provider
+   answers first is then reused for the rest of that conversation's
+   tool-calling rounds, so a single chat turn doesn't hop between models
+   mid-thought. */
+async function callWithFallback(messages, tools) {
+  if (!PROVIDERS.length) {
+    const err = new Error("Tidak ada AI provider yang dikonfigurasi. Atur minimal satu dari: GROQ_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, MISTRAL_API_KEY.");
+    err.status = 500;
+    throw err;
+  }
+  let lastErr = null;
+  for (const provider of PROVIDERS) {
+    try {
+      const data = await callProvider(provider, messages, tools);
+      return { data, provider };
+    } catch (err) {
+      console.log(`[ai] provider "${provider.name}" failed (${err.status || "?"}): ${err.message}`);
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 app.post("/api/ai/chat", async (req, res) => {
   const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
   if (isRateLimited(ip)) {
     return res.status(429).json({ error: "Terlalu banyak pertanyaan dalam waktu singkat, coba lagi sebentar lagi." });
-  }
-  if (!GROQ_API_KEY) {
-    return res.status(500).json({ error: "GROQ_API_KEY belum diatur di server (environment variable)." });
   }
   const { question, context, history } = req.body || {};
   if (!question || typeof question !== "string") {
@@ -613,7 +680,7 @@ app.post("/api/ai/chat", async (req, res) => {
   ];
 
   try {
-    let data = await callGroq(messages, TOOLS);
+    let { data, provider } = await callWithFallback(messages, TOOLS);
     let rounds = 0;
     while (rounds < 3) {
       const msg = data.choices?.[0]?.message;
@@ -622,18 +689,18 @@ app.post("/api/ai/chat", async (req, res) => {
       for (const call of msg.tool_calls) {
         let args = {};
         try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* ignore */ }
-        console.log(`[ai] tool call: ${call.function.name}(${JSON.stringify(args)})`);
+        console.log(`[ai:${provider.name}] tool call: ${call.function.name}(${JSON.stringify(args)})`);
         const result = runTool(call.function.name, args);
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
       }
-      data = await callGroq(messages, TOOLS);
+      data = await callProvider(provider, messages, TOOLS);
       rounds += 1;
     }
     const answer = data.choices?.[0]?.message?.content || "(Tidak ada jawaban.)";
-    res.json({ answer });
+    res.json({ answer, provider: provider.name });
   } catch (err) {
-    console.log("[ai] ERROR:", err.message);
-    res.status(err.status || 500).json({ error: err.message || "Gagal menghubungi Groq API." });
+    console.log("[ai] ERROR (semua provider gagal):", err.message);
+    res.status(err.status || 500).json({ error: err.message || "Gagal menghubungi AI provider." });
   }
 });
 
