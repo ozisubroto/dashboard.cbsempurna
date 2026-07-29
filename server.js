@@ -214,6 +214,119 @@ function toolGetProdukBulanDetail({ produk, bulan, tahun, trx }) {
   };
 }
 
+/* Tool 5: status Monitoring Stock (DOI + klasifikasi Fast/Slow/Dead/Erratic
+   Moving), mereplikasi persis logika di halaman "Monitoring Stock" pada
+   dashboard, supaya AI bisa menjawab pertanyaan seputar stok tanpa mengarang.
+   Fast Moving dihitung per-brand: produk-produk teratas (berdasar Avg Value)
+   yang kumulatifnya mencapai 80% dari total Avg Value brand tersebut. */
+function toolGetStockStatus({ status_stock, status_produk, brand, kategori, produk, sort_by, top_n }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const stockMap = raw.stock || {};
+  const tx = raw.tx;
+  const trxIdx = d.trx.indexOf("Selling In");
+
+  let latestYmIdx = -1;
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (latestYmIdx === -1 || d.ym[tx.ym[i]] > d.ym[latestYmIdx]) latestYmIdx = tx.ym[i];
+  }
+  if (latestYmIdx === -1) return { error: "Tidak ada data Selling In untuk menghitung status stock." };
+  const [latestY, latestM] = d.ym[latestYmIdx].split("-").map(Number);
+  function shiftMonth(y, m, delta) { const idx = (y * 12 + (m - 1)) + delta; return [Math.floor(idx / 12), (idx % 12) + 1]; }
+  const monthDefs = [3, 2, 1].map(back => {
+    const [yy, mm] = shiftMonth(latestY, latestM, -back);
+    const ymStr = `${yy}-${String(mm).padStart(2, "0")}`;
+    return { label: `${MONTH_NAMES[mm - 1]} ${yy}`, idx: d.ym.indexOf(ymStr) };
+  });
+  const validMonthCount = monthDefs.filter(md => md.idx !== -1).length || 3;
+
+  const qtyByProdMonth = new Map();
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    const mi = monthDefs.findIndex(md => md.idx === tx.ym[i]);
+    if (mi === -1) continue;
+    const p = tx.prod[i];
+    if (!qtyByProdMonth.has(p)) qtyByProdMonth.set(p, [0, 0, 0]);
+    qtyByProdMonth.get(p)[mi] += tx.qty[i];
+  }
+
+  const rows = [];
+  for (let p = 0; p < d.prod.length; p++) {
+    const nama = d.prod[p];
+    const brandLabel = d.brand[raw.prodMeta.brand[p]];
+    const katLabel = d.kat[raw.prodMeta.kat[p]];
+    if (katLabel && katLabel.toLowerCase() === "others") continue;
+    const months = qtyByProdMonth.get(p) || [0, 0, 0];
+    const sum = months.reduce((a, b) => a + b, 0);
+    const avgQty = validMonthCount > 0 ? sum / validMonthCount : 0;
+    const stockInfo = stockMap[nama] || null;
+    const stockQty = stockInfo ? (stockInfo.qty || 0) : 0;
+    const harga = stockInfo ? (stockInfo.harga || 0) : 0;
+    const avgValue = avgQty * harga;
+    const zeroMonths = months.filter(v => v <= 0).length;
+    rows.push({ id: p, nama, brand: brandLabel, kategori: katLabel, stockQty, harga, avgQty, avgValue, zeroMonths, hasStockData: !!stockInfo });
+  }
+
+  const byBrand = new Map();
+  rows.forEach(r => { if (!byBrand.has(r.brand)) byBrand.set(r.brand, []); byBrand.get(r.brand).push(r); });
+  const fastSet = new Set();
+  byBrand.forEach(list => {
+    const total = list.reduce((s, r) => s + r.avgValue, 0);
+    const sorted = list.slice().sort((a, b) => b.avgValue - a.avgValue);
+    let cum = 0;
+    for (const r of sorted) {
+      cum += r.avgValue;
+      fastSet.add(r.id);
+      if (total > 0 && cum >= 0.8 * total) break;
+    }
+  });
+
+  const anyStockData = rows.some(r => r.hasStockData);
+  rows.forEach(r => {
+    if (r.zeroMonths === 3) r.status_produk = "Dead Moving";
+    else if (r.zeroMonths >= 2) r.status_produk = "Erratic Moving";
+    else if (fastSet.has(r.id)) r.status_produk = "Fast Moving";
+    else r.status_produk = "Slow Moving";
+
+    if (r.avgQty <= 0) r.doi = null;
+    else r.doi = (r.stockQty / r.avgQty) * 30;
+
+    if (r.doi === null) r.status_stock = "Dead Stock";
+    else if (r.doi <= 60) r.status_stock = "Under Stock";
+    else if (r.doi <= 90) r.status_stock = "Normal Stock";
+    else if (r.doi <= 180) r.status_stock = "Over Stock";
+    else r.status_stock = "Critical Over Stock";
+  });
+
+  let filtered = rows;
+  if (status_stock) filtered = filtered.filter(r => r.status_stock.toLowerCase() === String(status_stock).toLowerCase());
+  if (status_produk) filtered = filtered.filter(r => r.status_produk.toLowerCase() === String(status_produk).toLowerCase());
+  if (brand) filtered = filtered.filter(r => r.brand.toLowerCase().includes(String(brand).toLowerCase()));
+  if (kategori) filtered = filtered.filter(r => r.kategori.toLowerCase().includes(String(kategori).toLowerCase()));
+  if (produk) filtered = filtered.filter(r => r.nama.toLowerCase().includes(String(produk).toLowerCase()));
+
+  if (sort_by === "doi_tertinggi") filtered.sort((a, b) => (b.doi ?? -1) - (a.doi ?? -1));
+  else if (sort_by === "doi_terendah") filtered.sort((a, b) => (a.doi ?? -1) - (b.doi ?? -1));
+  else filtered.sort((a, b) => b.avgValue - a.avgValue);
+
+  const n = Math.max(1, Math.min(50, parseInt(top_n, 10) || 15));
+  const result = filtered.slice(0, n).map(r => ({
+    produk: r.nama, brand: r.brand, kategori: r.kategori,
+    stock_qty: Math.round(r.stockQty), harga: Math.round(r.harga),
+    avg_qty_3bulan: Math.round(r.avgQty), avg_value_3bulan: Math.round(r.avgValue),
+    days_of_inventory: r.doi === null ? "Dead Stock (tidak ada penjualan 3 bulan terakhir)" : +r.doi.toFixed(1),
+    status_produk: r.status_produk, status_stock: r.status_stock,
+  }));
+
+  return {
+    periode_referensi: monthDefs.map(m => m.label).join(", "),
+    catatan_data_stock: anyStockData ? "Data stock qty & harga sudah tersedia." : "PERINGATAN: data Stock Qty & Harga belum diupload sama sekali, sehingga semua nilai Stock/DOI/Status Stock di bawah ini adalah 0/tidak valid - sampaikan ini ke user kalau relevan.",
+    jumlah_produk_cocok: filtered.length,
+    produk: result,
+  };
+}
+
 /* Tool 4: ranking kota (opsional difilter per region) berdasarkan besarnya
    kenaikan/penurunan dibanding bulan sebelumnya, lengkap produk pendorong
    tiap kota. Ini menjawab pertanyaan seperti "kota mana yang paling turun
@@ -339,6 +452,26 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "get_stock_status",
+      description: "Ambil status Monitoring Stock produk: Days of Inventory (DOI), Status Stock (Dead/Under/Normal/Over/Critical Over Stock), dan kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving). WAJIB pakai tool ini untuk pertanyaan apa pun soal stok, DOI, atau pergerakan produk (fast/slow/dead moving) - jangan pernah menjawab dari ringkasan data biasa untuk topik ini. Bisa difilter kombinasi status_stock, status_produk, brand, kategori, dan/atau nama produk.",
+      parameters: {
+        type: "object",
+        properties: {
+          status_stock: { type: "string", enum: ["Dead Stock", "Under Stock", "Normal Stock", "Over Stock", "Critical Over Stock"], description: "Opsional: filter status stock" },
+          status_produk: { type: "string", enum: ["Fast Moving", "Slow Moving", "Erratic Moving", "Dead Moving"], description: "Opsional: filter kategori pergerakan produk" },
+          brand: { type: "string", description: "Opsional: filter nama brand" },
+          kategori: { type: "string", description: "Opsional: filter kategori produk (mis. Sheet Mask, Lip Tint)" },
+          produk: { type: "string", description: "Opsional: filter/cari nama produk tertentu" },
+          sort_by: { type: "string", enum: ["avg_value", "doi_tertinggi", "doi_terendah"], description: "Urutan hasil: avg_value (default, produk paling laris dulu), doi_tertinggi, atau doi_terendah" },
+          top_n: { type: "integer", description: "Jumlah produk yang ditampilkan, default 15, maksimal 50" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_kota_ranking_perubahan",
       description: "Ranking kota (opsional difilter dalam satu region tertentu) berdasarkan besarnya PERUBAHAN (naik atau turun) dibanding bulan sebelumnya, lengkap produk pendorong tiap kota. WAJIB pakai tool ini untuk pertanyaan seperti 'kota mana yang paling turun/naik di region X' - JANGAN menebak nama kota dari percakapan sebelumnya, dan JANGAN campur kota dari region lain. Kalau user cuma minta yang turun, isi arah='turun' supaya kota yang naik tidak ikut disebutkan.",
       parameters: {
@@ -412,6 +545,7 @@ const TOOLS = [
 
 function runTool(name, args) {
   try {
+    if (name === "get_stock_status") return toolGetStockStatus(args);
     if (name === "get_kota_ranking_perubahan") return toolGetKotaRankingPerubahan(args);
     if (name === "get_periode_total") return toolGetPeriodeTotal(args);
     if (name === "get_kota_bulan_detail") return toolGetKotaBulanDetail(args);
@@ -430,6 +564,7 @@ ATURAN WAJIB soal angka:
 - Untuk PERTANYAAN APA PUN yang butuh total angka (per bulan, YTD, rentang bulan, per region, per brand, per kota, per produk), SELALU panggil tool yang sesuai untuk mendapat angka pasti. Jangan pernah menghitung sendiri dari ringkasan data.
 - Untuk pertanyaan "kota/produk mana yang paling naik/turun" (dalam satu region atau secara umum), SELALU pakai get_kota_ranking_perubahan dengan parameter "arah" yang sesuai (turun/naik/semua) - JANGAN pernah menjawab dari nama kota yang kebetulan disebut di percakapan sebelumnya, karena kota itu belum tentu relevan/termasuk region yang ditanyakan sekarang. Setiap pertanyaan baru soal ranking kota/region harus dijawab dengan memanggil tool lagi, bukan mengambil dari jawaban giliran sebelumnya.
 - Untuk membandingkan dua periode/tahun, panggil tool yang sesuai sekali untuk masing-masing periode.
+- Untuk pertanyaan apa pun soal STOK, Days of Inventory (DOI), atau kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving), SELALU pakai get_stock_status. Kalau hasil tool memberi "catatan_data_stock" berisi peringatan bahwa data stock belum diupload, sampaikan itu ke user apa adanya - jangan berpura-pura datanya lengkap.
 - Jangan pernah mengarang angka atau nama kota/produk yang tidak ada di hasil tool/data. Kalau tool mengembalikan error atau daftar kosong, sampaikan itu apa adanya ke user.
 
 Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.`;
