@@ -7,7 +7,7 @@ import {
   LayoutDashboard, MapPin, Package, Target, Sparkles, UploadCloud,
   LogOut, Lock, User, ChevronDown, ChevronLeft, ChevronRight, X, Search, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Building2, Globe2, CheckCircle2, AlertCircle,
-  ArrowUpDown, ChevronUp, Download, FileText
+  ArrowUpDown, ChevronUp, Download, FileText, Archive
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -541,6 +541,100 @@ function computeInsights(M, f) {
   };
 }
 
+/* Monitoring Stock: national Selling In qty (last 3 complete months before the
+   latest month in the dataset) per product, joined with stock qty/harga
+   (from the optional "Stock" sheet), classified by movement (Fast/Slow/
+   Dead/Erratic Moving, per-brand ABC/Pareto on avg value) and by stock
+   status (Days of Inventory). */
+function computeMonitoringStock(M) {
+  const { RAW, d } = M;
+  const tx = RAW.tx;
+  const stockMap = RAW.stock || {};
+
+  const trxIdx = d.trx.indexOf("Selling In");
+  let latestYmIdx = -1;
+  for (let i = 0; i < M.N; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (latestYmIdx === -1 || d.ym[tx.ym[i]] > d.ym[latestYmIdx]) latestYmIdx = tx.ym[i];
+  }
+  if (latestYmIdx === -1) return { rows: [], monthLabels: ["-", "-", "-"], anyStockData: false };
+  const latestYm = d.ym[latestYmIdx];
+  const [latestY, latestM] = latestYm.split("-").map(Number);
+  function shiftMonth(y, m, delta) {
+    const idx = (y * 12 + (m - 1)) + delta;
+    return [Math.floor(idx / 12), (idx % 12) + 1];
+  }
+  const monthDefs = [3, 2, 1].map(back => {
+    const [yy, mm] = shiftMonth(latestY, latestM, -back);
+    const ymStr = `${yy}-${String(mm).padStart(2, "0")}`;
+    return { ym: ymStr, label: MONTHS[mm - 1] + " " + String(yy).slice(2), idx: d.ym.indexOf(ymStr) };
+  });
+  const validMonthCount = monthDefs.filter(md => md.idx !== -1).length || 3;
+
+  const qtyByProdMonth = new Map();
+  for (let i = 0; i < M.N; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    const mi = monthDefs.findIndex(md => md.idx === tx.ym[i]);
+    if (mi === -1) continue;
+    const p = tx.prod[i];
+    if (!qtyByProdMonth.has(p)) qtyByProdMonth.set(p, [0, 0, 0]);
+    qtyByProdMonth.get(p)[mi] += tx.qty[i];
+  }
+
+  const rows = [];
+  for (let p = 0; p < d.prod.length; p++) {
+    const nama = d.prod[p];
+    const brand = d.brand[RAW.prodMeta.brand[p]];
+    const kategori = d.kat[RAW.prodMeta.kat[p]];
+    const months = qtyByProdMonth.get(p) || [0, 0, 0];
+    const sum = months.reduce((a, b) => a + b, 0);
+    const avgQty = validMonthCount > 0 ? sum / validMonthCount : 0;
+    const stockInfo = stockMap[nama] || null;
+    const stockQty = stockInfo ? (stockInfo.qty || 0) : 0;
+    const harga = stockInfo ? (stockInfo.harga || 0) : 0;
+    const stockValue = stockQty * harga;
+    const avgValue = avgQty * harga;
+    const zeroMonths = months.filter(v => v <= 0).length;
+    rows.push({ id: p, nama, kategori, brand, stockQty, harga, stockValue, months, avgQty, avgValue, zeroMonths, hasStockData: !!stockInfo });
+  }
+
+  const totalAvgQty = rows.reduce((s, r) => s + r.avgQty, 0);
+  rows.forEach(r => { r.kontribusiPersen = totalAvgQty > 0 ? (r.avgQty / totalAvgQty) * 100 : 0; });
+
+  const byBrand = new Map();
+  rows.forEach(r => { if (!byBrand.has(r.brand)) byBrand.set(r.brand, []); byBrand.get(r.brand).push(r); });
+  const fastSet = new Set();
+  byBrand.forEach(list => {
+    const total = list.reduce((s, r) => s + r.avgValue, 0);
+    const sorted = list.slice().sort((a, b) => b.avgValue - a.avgValue);
+    let cum = 0;
+    for (const r of sorted) {
+      cum += r.avgValue;
+      fastSet.add(r.id);
+      if (total > 0 && cum >= 0.8 * total) break;
+    }
+  });
+
+  rows.forEach(r => {
+    if (r.zeroMonths === 3) r.statusProduk = "Dead Moving";
+    else if (r.zeroMonths >= 2) r.statusProduk = "Erratic Moving";
+    else if (fastSet.has(r.id)) r.statusProduk = "Fast Moving";
+    else r.statusProduk = "Slow Moving";
+
+    if (r.avgQty <= 0) { r.doi = null; }
+    else { r.doi = (r.stockQty / r.avgQty) * 30; }
+
+    if (r.doi === null) r.statusStock = "Dead Stock";
+    else if (r.doi <= 60) r.statusStock = "Under Stock";
+    else if (r.doi <= 90) r.statusStock = "Normal Stock";
+    else if (r.doi <= 180) r.statusStock = "Over Stock";
+    else r.statusStock = "Critical Over Stock";
+  });
+
+  const anyStockData = rows.some(r => r.hasStockData);
+  return { rows, monthLabels: monthDefs.map(m => m.label), anyStockData };
+}
+
 /* ============================================================
    XLSX UPLOAD -> RAW MODEL BUILDER (mirrors the python pipeline)
    ============================================================ */
@@ -559,7 +653,7 @@ function excelSerialToYM(v) {
   return null;
 }
 
-function buildRawFromRows(rows) {
+function buildRawFromRows(rows, stockRows) {
   const norm = new Map();
   function canon(v) {
     if (v === null || v === undefined) return null;
@@ -649,10 +743,21 @@ function buildRawFromRows(rows) {
     amt: tgtRows.map(r => Math.round(r.amt)),
   };
 
+  const stockMap = {};
+  if (Array.isArray(stockRows)) {
+    for (const r of stockRows) {
+      const produk = canon(r["Nama Produk"] ?? r["Produk"] ?? r["Nama produk"]);
+      if (!produk) continue;
+      const qty = Number(r["Stock Qty"] ?? r["Stock - Qty"] ?? r["Qty Stock"] ?? r["Stock"] ?? r["Qty"]) || 0;
+      const harga = Number(r["Harga @pcs"] ?? r["Harga"] ?? r["Harga Satuan"] ?? r["Harga Pcs"] ?? r["Price"]) || 0;
+      stockMap[produk] = { qty, harga };
+    }
+  }
+
   return {
     dicts: { ym: ymAll.arr, trx: trxAll.arr, reg: regAll.arr, area: areaAll.arr, kota: kotaAll.arr, brand: brandAll.arr, kat: katAll.arr, prod: prodAll.arr },
     prodMeta: { brand: prodBrandArr, kat: prodKatArr },
-    tx, tgt,
+    tx, tgt, stock: stockMap,
     meta: { rowCount: rows.length, txCount: txRows.length, tgtCount: tgtRows.length },
   };
 }
@@ -843,6 +948,7 @@ const NAV_ITEMS = [
   { id: "kota", label: "Performance Kota", icon: MapPin },
   { id: "produk", label: "Performance Produk", icon: Package },
   { id: "target", label: "Sales Growth", icon: TrendingUp },
+  { id: "stock", label: "Monitoring Stock", icon: Archive },
   { id: "insight", label: "Insight", icon: Sparkles },
   { id: "reporting", label: "Reporting", icon: FileText },
 ];
@@ -1521,6 +1627,144 @@ function BarRow({ rank, label, value, max, color, fmt, contribPct }) {
 }
 
 /* ============================================================
+   PAGE: MONITORING STOCK
+   ============================================================ */
+const STATUS_PRODUK_COLORS = {
+  "Fast Moving": "#8FD6AC",
+  "Slow Moving": "#F2D98B",
+  "Erratic Moving": "#F3A8C6",
+  "Dead Moving": "#C0596B",
+};
+const STATUS_STOCK_COLORS = {
+  "Dead Stock": "#C0596B",
+  "Under Stock": "#F3A8C6",
+  "Normal Stock": "#8FD6AC",
+  "Over Stock": "#F2D98B",
+  "Critical Over Stock": "#E8734A",
+};
+
+function StatusBadge({ label, colorMap }) {
+  const color = colorMap[label] || "#B8AECB";
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
+      style={{ background: color + "26", color }}>
+      {label}
+    </span>
+  );
+}
+
+function MonitoringStockPage({ M }) {
+  const data = useMemo(() => computeMonitoringStock(M), [M]);
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("avgValue");
+  const [sortDir, setSortDir] = useState("desc");
+
+  function handleSort(key, dir) { setSortKey(key); setSortDir(dir); }
+
+  const visibleRows = useMemo(() => {
+    let arr = data.rows;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      arr = arr.filter(r => r.nama.toLowerCase().includes(q));
+    }
+    arr = arr.slice();
+    const STRING_KEYS = new Set(["nama", "kategori", "brand", "statusProduk", "statusStock"]);
+    arr.sort((a, b) => {
+      if (STRING_KEYS.has(sortKey)) {
+        const cmp = String(a[sortKey]).localeCompare(String(b[sortKey]));
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      if (sortKey.startsWith("month_")) {
+        const idx = parseInt(sortKey.slice(6), 10);
+        const va = a.months[idx], vb = b.months[idx];
+        return sortDir === "asc" ? va - vb : vb - va;
+      }
+      const va = sortKey === "doi" ? (a.doi === null ? -1 : a.doi) : a[sortKey];
+      const vb = sortKey === "doi" ? (b.doi === null ? -1 : b.doi) : b[sortKey];
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
+    return arr;
+  }, [data.rows, search, sortKey, sortDir]);
+
+  return (
+    <div className="cbs-fadein space-y-4">
+      <div className="flex flex-wrap items-center gap-2 justify-between">
+        <div className="relative" style={{ width: 260 }}>
+          <Search size={14} color="#8A7FA0" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama produk..."
+            className="w-full pl-8 pr-3 py-2 rounded-xl border text-sm" style={{ borderColor: "#E4DCF2" }} />
+        </div>
+        <div className="text-sm" style={{ color: "#6E6480" }}>
+          {visibleRows.length} produk · Selling In {data.monthLabels.join(" - ")}
+        </div>
+      </div>
+
+      {!data.anyStockData && (
+        <div className="flex items-start gap-2 p-3 rounded-xl text-sm" style={{ background: "#FDF4E3", color: "#8A6D1D" }}>
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span>Data Stock Qty &amp; Harga belum tersedia. Kolom Stock, Stock Value, Avg Value, dan Days of Inventory akan otomatis terisi begitu Anda upload ulang Database SI-SO yang sudah menyertakan sheet "Stock".</span>
+        </div>
+      )}
+
+      <div className="cbs-card overflow-hidden">
+        <div className="overflow-auto cbs-scroll" style={{ maxHeight: "70vh" }}>
+          <table className="w-full text-xs cbs-table" style={{ minWidth: 1500 }}>
+            <thead>
+              <tr style={{ color: "#8A7FA0" }}>
+                <th className="cbs-sticky-corner text-center px-2 py-2 font-medium" style={{ background: "#F7F5FA", width: 40 }}>No.</th>
+                <SortableTh label="Nama Produk" sortKey="nama" activeKey={sortKey} activeDir={sortDir} onSort={handleSort}
+                  className="cbs-sticky-col text-left px-3 py-2 font-medium" style={{ background: "#F7F5FA", left: 40, top: 0, position: "sticky", zIndex: 3, minWidth: 220 }} />
+                <SortableTh label="Kategori" sortKey="kategori" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-left px-2 py-2 font-medium" />
+                <SortableTh label="Brand" sortKey="brand" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-left px-2 py-2 font-medium" />
+                <SortableTh label="Stock" sortKey="stockQty" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                <SortableTh label="Harga" sortKey="harga" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                <SortableTh label="Stock Value" sortKey="stockValue" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                {data.monthLabels.map((lbl, mi) => (
+                  <SortableTh key={lbl + mi} label={lbl} sortKey={"month_" + mi} activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                ))}
+                <SortableTh label="Avg Qty" sortKey="avgQty" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Avg Value" sortKey="avgValue" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" style={{ color: "#241934" }} />
+                <SortableTh label="Kontribusi" sortKey="kontribusiPersen" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                <SortableTh label="Kategori Produk" sortKey="statusProduk" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-center px-2 py-2 font-medium" />
+                <SortableTh label="DOI" sortKey="doi" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-right px-2 py-2 font-medium" />
+                <SortableTh label="Status Stock" sortKey="statusStock" activeKey={sortKey} activeDir={sortDir} onSort={handleSort} className="text-center px-3 py-2 font-medium" />
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((r, i) => {
+                const rowBg = i % 2 ? "#FCFBFE" : "#fff";
+                return (
+                  <tr key={r.id} style={{ borderTop: "1px solid #F1ECFA", background: rowBg }}>
+                    <td className="cbs-sticky-col text-center px-2 py-1.5" style={{ background: rowBg, width: 40 }}>{i + 1}</td>
+                    <td className="cbs-sticky-col px-3 py-1.5" style={{ background: rowBg, left: 40 }} title={r.nama}>
+                      <span className="inline-block rounded-full mr-1.5" style={{ width: 6, height: 6, background: BRAND_COLORS[r.brand] || "#ccc" }} />
+                      {r.nama}
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{r.kategori}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{r.brand}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums">{formatNum(r.stockQty)}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums">{r.harga ? formatValue(r.harga, true) : "–"}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums">{r.stockValue ? formatValue(r.stockValue, true) : "–"}</td>
+                    {r.months.map((v, mi) => <td key={mi} className="text-right px-2 py-1.5 tabular-nums" style={{ color: v ? "#241934" : "#D8D0E8" }}>{v ? formatNum(v) : "–"}</td>)}
+                    <td className="text-right px-2 py-1.5 font-semibold tabular-nums">{formatNum(r.avgQty)}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums">{r.avgValue ? formatValue(r.avgValue, true) : "–"}</td>
+                    <td className="text-right px-2 py-1.5 tabular-nums" style={{ color: "#8A7FA0" }}>{formatPct(r.kontribusiPersen)}</td>
+                    <td className="text-center px-2 py-1.5"><StatusBadge label={r.statusProduk} colorMap={STATUS_PRODUK_COLORS} /></td>
+                    <td className="text-right px-2 py-1.5 tabular-nums">{r.doi === null ? "–" : r.doi.toFixed(1)}</td>
+                    <td className="text-center px-3 py-1.5"><StatusBadge label={r.statusStock} colorMap={STATUS_STOCK_COLORS} /></td>
+                  </tr>
+                );
+              })}
+              {visibleRows.length === 0 && <tr><td colSpan={16} className="text-center py-10" style={{ color: "#8A7FA0" }}>Tidak ada produk untuk pencarian ini.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    PAGE: REPORTING (PPTX export)
    ============================================================ */
 function hexNoHash(c) { return (c || "999999").replace("#", ""); }
@@ -1774,6 +2018,7 @@ function buildAiContext(M) {
   return {
     tahun: year,
     tahun_pembanding: growthSI.prevYear,
+    catatan: "per_brand_bulanan dan per_region_bulanan berisi rincian value per bulan (Jan-Des) untuk tahun berjalan.",
     selling_in: {
       total: Math.round(siBrand.total),
       target: Math.round(targetSI),
@@ -1781,6 +2026,8 @@ function buildAiContext(M) {
       growth_persen_vs_tahun_lalu: +growthSI.growthPct.toFixed(1),
       per_brand: byKeyTotals(siBrand),
       per_region: byKeyTotals(siRegion),
+      per_brand_bulanan: siBrand.chartData,
+      per_region_bulanan: siRegion.chartData,
     },
     selling_out: {
       total: Math.round(soBrand.total),
@@ -1789,6 +2036,8 @@ function buildAiContext(M) {
       growth_persen_vs_tahun_lalu: +growthSO.growthPct.toFixed(1),
       per_brand: byKeyTotals(soBrand),
       per_region: byKeyTotals(soRegion),
+      per_brand_bulanan: soBrand.chartData,
+      per_region_bulanan: soRegion.chartData,
     },
     top_5_kota_selling_out: ins.topKotaSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
     top_5_produk_selling_out: ins.topProdukSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
@@ -1985,7 +2234,19 @@ function UploadPage({ onDataLoaded, dataMeta }) {
           return cleaned;
         });
         if (!rows.length) throw new Error("File tidak berisi baris data.");
-        const newRaw = buildRawFromRows(rows);
+
+        const stockSheetName = wb.SheetNames.find(n => /stock/i.test(n));
+        let stockRows = null;
+        if (stockSheetName) {
+          const stockRaw = XLSX.utils.sheet_to_json(wb.Sheets[stockSheetName], { defval: null, raw: true });
+          stockRows = stockRaw.map(row => {
+            const cleaned = {};
+            for (const key in row) cleaned[key.trim()] = row[key];
+            return cleaned;
+          });
+        }
+
+        const newRaw = buildRawFromRows(rows, stockRows);
         if (newRaw.tx.ym.length === 0 && newRaw.tgt.ym.length === 0) throw new Error("Tidak ditemukan baris dengan Kategori Trx yang valid.");
 
         const res = await fetch("/api/data", {
@@ -1997,7 +2258,8 @@ function UploadPage({ onDataLoaded, dataMeta }) {
         if (!res.ok) throw new Error(resData.error || ("Server menolak data (HTTP " + res.status + ")"));
 
         onDataLoaded(newRaw);
-        setStatus({ type: "ok", msg: `Berhasil disimpan secara permanen di server: ${newRaw.meta.rowCount.toLocaleString("id-ID")} baris (${newRaw.meta.txCount.toLocaleString("id-ID")} transaksi, ${newRaw.meta.tgtCount.toLocaleString("id-ID")} target). Semua pengguna akan melihat data ini.` });
+        const stockCount = Object.keys(newRaw.stock || {}).length;
+        setStatus({ type: "ok", msg: `Berhasil disimpan secara permanen di server: ${newRaw.meta.rowCount.toLocaleString("id-ID")} baris (${newRaw.meta.txCount.toLocaleString("id-ID")} transaksi, ${newRaw.meta.tgtCount.toLocaleString("id-ID")} target)${stockCount ? `, ${stockCount.toLocaleString("id-ID")} data stock produk` : ""}. Semua pengguna akan melihat data ini.` });
       } catch (err) {
         setStatus({ type: "err", msg: "Gagal memproses/menyimpan file: " + err.message });
       } finally { setBusy(false); }
@@ -2013,6 +2275,7 @@ function UploadPage({ onDataLoaded, dataMeta }) {
         <p className="text-sm mb-5" style={{ color: "#8A7FA0" }}>
           Unggah file Excel (.xlsx) dengan struktur kolom yang sama seperti database Sales Performance:
           Bulan, Kategori Trx, Chanel, Region, Kota, Area, Id Produk, Nama Produk, Kategori, Brand, Id Toko, Nama Toko, Qty, Amount.
+          Kalau file punya sheet tambahan bernama "Stock" (kolom Nama Produk, Stock Qty, Harga @pcs), datanya otomatis dipakai untuk halaman Monitoring Stock.
         </p>
         <div
           onDragOver={e => e.preventDefault()}
@@ -2156,6 +2419,7 @@ export default function App() {
           {page === "kota" && <KotaPage M={M} />}
           {page === "produk" && <ProdukPage M={M} />}
           {page === "target" && <SalesGrowthPage M={M} />}
+          {page === "stock" && <MonitoringStockPage M={M} />}
           {page === "insight" && <InsightPage M={M} />}
           {page === "reporting" && <ReportingPage M={M} />}
           {page === "upload" && user.role === "admin" && <UploadPage onDataLoaded={handleDataLoaded} dataMeta={dataMeta} />}
