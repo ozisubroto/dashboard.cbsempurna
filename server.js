@@ -126,13 +126,17 @@ const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
 
 /* Tried in order until one succeeds. Only providers with an API key actually
    configured (via environment variable) are included, so you can enable as
-   many or as few of these as you like - just set the matching *_API_KEY. */
+   many or as few of these as you like - just set the matching *_API_KEY.
+   OpenRouter is placed LAST: its "openrouter/free" auto-router picks a
+   different underlying model on every call (whatever free model happens to
+   be available), which makes answer quality/consistency unpredictable -
+   the other providers each run one fixed, known model. */
 const PROVIDERS = [
   { name: "groq", url: GROQ_URL, key: GROQ_API_KEY, model: GROQ_MODEL },
-  { name: "openrouter", url: OPENROUTER_URL, key: OPENROUTER_API_KEY, model: OPENROUTER_MODEL },
   { name: "gemini", url: GEMINI_URL, key: GEMINI_API_KEY, model: GEMINI_MODEL },
   { name: "cerebras", url: CEREBRAS_URL, key: CEREBRAS_API_KEY, model: CEREBRAS_MODEL },
   { name: "mistral", url: MISTRAL_URL, key: MISTRAL_API_KEY, model: MISTRAL_MODEL },
+  { name: "openrouter", url: OPENROUTER_URL, key: OPENROUTER_API_KEY, model: OPENROUTER_MODEL },
 ].filter(p => p.key);
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
