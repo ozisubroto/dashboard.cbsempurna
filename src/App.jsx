@@ -2100,7 +2100,7 @@ function AIChatWidget({ M }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Gagal mendapat jawaban.");
-      setMessages(m => [...m, { role: "assistant", content: data.answer }]);
+      setMessages(m => [...m, { role: "assistant", content: data.answer, provider: data.provider }]);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2134,9 +2134,14 @@ function AIChatWidget({ M }) {
               </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} className="text-xs rounded-xl px-3 py-2"
-                style={{ background: m.role === "user" ? "#241934" : "#F1ECFA", color: m.role === "user" ? "#fff" : "#241934", whiteSpace: "pre-wrap", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0 }}>
-                {m.content}
+              <div key={i}>
+                <div className="text-xs rounded-xl px-3 py-2"
+                  style={{ background: m.role === "user" ? "#241934" : "#F1ECFA", color: m.role === "user" ? "#fff" : "#241934", whiteSpace: "pre-wrap", maxWidth: "85%", marginLeft: m.role === "user" ? "auto" : 0 }}>
+                  {m.content}
+                </div>
+                {m.role === "assistant" && m.provider && (
+                  <div className="text-[9px] mt-0.5 px-1" style={{ color: "#B8AECB" }}>via {m.provider}</div>
+                )}
               </div>
             ))}
             {busy && <div className="text-xs" style={{ color: "#8A7FA0" }}>Sedang berpikir...</div>}
