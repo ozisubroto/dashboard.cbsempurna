@@ -109,7 +109,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 /* Google AI Studio key (aistudio.google.com), free tier, no credit card.
    Uses Gemini's official OpenAI-compatibility shim - same request/response
    shape as OpenAI, just a different base URL. */
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY || "";
@@ -628,21 +628,34 @@ async function callProvider(provider, messages, tools) {
     }),
   });
   const data = await res.json();
-  if (!res.ok) {
-    const msg = data.error?.message || data.error?.status || `${provider.name} API mengembalikan error.`;
-    const err = new Error(msg);
-    err.status = res.status;
+  // Some providers (notably OpenRouter serving free/rotating models) return
+  // HTTP 200 but with the actual failure embedded in the body - treat that
+  // the same as a non-2xx response so it triggers retry/fallback correctly.
+  if (!res.ok || data.error) {
+    const msg = data.error?.message || data.error?.status || data.error || `${provider.name} API mengembalikan error.`;
+    const err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    err.status = res.ok ? 502 : res.status;
+    err.provider = provider.name;
+    throw err;
+  }
+  if (!data.choices || !data.choices.length) {
+    const err = new Error(`${provider.name} tidak mengembalikan jawaban yang valid.`);
+    err.status = 502;
     err.provider = provider.name;
     throw err;
   }
   return data;
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 /* Tries each configured provider in order (Groq -> OpenRouter -> Gemini ->
-   Cerebras -> Mistral) until one responds successfully. Whichever provider
-   answers first is then reused for the rest of that conversation's
-   tool-calling rounds, so a single chat turn doesn't hop between models
-   mid-thought. */
+   Cerebras -> Mistral) until one responds successfully. Each provider gets
+   one quick retry first (free-tier/rotating models occasionally hiccup on a
+   single request), and only moves to the next provider if that also fails.
+   Whichever provider answers first is then reused for the rest of that
+   conversation's tool-calling rounds, so a single chat turn doesn't hop
+   between models mid-thought. */
 async function callWithFallback(messages, tools) {
   if (!PROVIDERS.length) {
     const err = new Error("Tidak ada AI provider yang dikonfigurasi. Atur minimal satu dari: GROQ_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY, MISTRAL_API_KEY.");
@@ -651,15 +664,20 @@ async function callWithFallback(messages, tools) {
   }
   let lastErr = null;
   for (const provider of PROVIDERS) {
-    try {
-      const data = await callProvider(provider, messages, tools);
-      return { data, provider };
-    } catch (err) {
-      console.log(`[ai] provider "${provider.name}" failed (${err.status || "?"}): ${err.message}`);
-      lastErr = err;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const data = await callProvider(provider, messages, tools);
+        return { data, provider };
+      } catch (err) {
+        console.log(`[ai] provider "${provider.name}" attempt ${attempt + 1} failed (${err.status || "?"}): ${err.message}`);
+        lastErr = err;
+        if (attempt === 0) await sleep(600);
+      }
     }
   }
-  throw lastErr;
+  const friendly = new Error("Semua AI provider yang dikonfigurasi sedang tidak bisa merespons (limit habis atau gangguan sementara). Coba lagi dalam beberapa saat, atau tambahkan provider cadangan lain (lihat GEMINI_API_KEY/CEREBRAS_API_KEY/MISTRAL_API_KEY di environment variable).");
+  friendly.status = lastErr?.status || 503;
+  throw friendly;
 }
 
 app.post("/api/ai/chat", async (req, res) => {
