@@ -168,57 +168,184 @@ function findIndexLoose(list, needle) {
 /* Tool 1: detail penjualan 1 kota pada 1 bulan tertentu, termasuk breakdown
    produk dan produk-produk yang paling mendorong kenaikan/penurunan
    dibanding bulan sebelumnya. */
+/* Shared core for Kota/Region/Area "bulan detail" tools: total, target,
+   %Achievement, MoM (+drivers), YTD-vs-last-year (+drivers). `breakdownByKota`
+   also computes Kota-level drivers (used for Region/Area, where "which city
+   drove the change" is a meaningful extra dimension on top of "which
+   product"). `matchTx`/`matchTgt` are predicates selecting rows belonging to
+   the location being queried (a single kota, or all kota in a region/area). */
+function buildLocationDetail({ raw, matchTx, matchTgt, bulanNum, tahunNum, trxLabel, tgtLabel, breakdownByKota }) {
+  const d = raw.dicts;
+  const trxIdx = d.trx.indexOf(trxLabel);
+  const targetTrxIdx = d.trx.indexOf(tgtLabel);
+  const targetYmIdx = d.ym.indexOf(`${tahunNum}-${String(bulanNum).padStart(2, "0")}`);
+
+  let prevYear = tahunNum, prevMonth = bulanNum - 1;
+  if (prevMonth < 1) { prevMonth = 12; prevYear -= 1; }
+  const prevYmIdx = d.ym.indexOf(`${prevYear}-${String(prevMonth).padStart(2, "0")}`);
+
+  const ytdThisSet = new Set(), ytdLastSet = new Set();
+  for (let m = 1; m <= bulanNum; m++) {
+    const idxThis = d.ym.indexOf(`${tahunNum}-${String(m).padStart(2, "0")}`);
+    if (idxThis !== -1) ytdThisSet.add(idxThis);
+    const idxLast = d.ym.indexOf(`${tahunNum - 1}-${String(m).padStart(2, "0")}`);
+    if (idxLast !== -1) ytdLastSet.add(idxLast);
+  }
+
+  const tx = raw.tx;
+  const curByProd = new Map(), prevByProd = new Map(), ytdThisByProd = new Map(), ytdLastByProd = new Map();
+  const curByKota = new Map(), prevByKota = new Map(), ytdThisByKota = new Map(), ytdLastByKota = new Map();
+  let curTotal = 0, prevTotal = 0, ytdThisTotal = 0, ytdLastTotal = 0;
+
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (!matchTx(i)) continue;
+    const prodLabel = d.prod[tx.prod[i]];
+    const kotaLabel = breakdownByKota ? d.kota[tx.kota[i]] : null;
+    const ymIdx = tx.ym[i];
+    const amt = tx.amt[i];
+    if (ymIdx === targetYmIdx) {
+      curByProd.set(prodLabel, (curByProd.get(prodLabel) || 0) + amt); curTotal += amt;
+      if (breakdownByKota) curByKota.set(kotaLabel, (curByKota.get(kotaLabel) || 0) + amt);
+    } else if (ymIdx === prevYmIdx) {
+      prevByProd.set(prodLabel, (prevByProd.get(prodLabel) || 0) + amt); prevTotal += amt;
+      if (breakdownByKota) prevByKota.set(kotaLabel, (prevByKota.get(kotaLabel) || 0) + amt);
+    }
+    if (ytdThisSet.has(ymIdx)) {
+      ytdThisByProd.set(prodLabel, (ytdThisByProd.get(prodLabel) || 0) + amt); ytdThisTotal += amt;
+      if (breakdownByKota) ytdThisByKota.set(kotaLabel, (ytdThisByKota.get(kotaLabel) || 0) + amt);
+    } else if (ytdLastSet.has(ymIdx)) {
+      ytdLastByProd.set(prodLabel, (ytdLastByProd.get(prodLabel) || 0) + amt); ytdLastTotal += amt;
+      if (breakdownByKota) ytdLastByKota.set(kotaLabel, (ytdLastByKota.get(kotaLabel) || 0) + amt);
+    }
+  }
+
+  const tgt = raw.tgt;
+  let targetBulanIni = 0;
+  for (let i = 0; i < tgt.ym.length; i++) {
+    if (tgt.trx[i] !== targetTrxIdx || tgt.ym[i] !== targetYmIdx) continue;
+    if (!matchTgt(i)) continue;
+    targetBulanIni += tgt.amt[i];
+  }
+
+  function topN(map, n) {
+    return Array.from(map.entries()).map(([nama, value]) => ({ nama, value: Math.round(value), kontribusi_persen: curTotal > 0 ? +((value / curTotal) * 100).toFixed(1) : 0 }))
+      .sort((a, b) => b.value - a.value).slice(0, n);
+  }
+  function topDrivers(mapA, mapB, keyA, keyB, n) {
+    const all = new Set([...mapA.keys(), ...mapB.keys()]);
+    return Array.from(all).map(nama => {
+      const a = mapA.get(nama) || 0, b = mapB.get(nama) || 0;
+      return { nama, [keyA]: Math.round(a), [keyB]: Math.round(b), perubahan: Math.round(a - b) };
+    }).sort((x, y) => Math.abs(y.perubahan) - Math.abs(x.perubahan)).slice(0, n);
+  }
+
+  const result = {
+    kategori_trx: trxLabel,
+    bulan_ini: { periode: `${MONTH_NAMES[bulanNum - 1]} ${tahunNum}`, total: Math.round(curTotal) },
+    bulan_lalu: prevYmIdx === -1 ? null : { periode: `${MONTH_NAMES[prevMonth - 1]} ${prevYear}`, total: Math.round(prevTotal) },
+    perubahan_mom_persen: prevTotal > 0 ? +(((curTotal - prevTotal) / prevTotal) * 100).toFixed(1) : null,
+    target_bulan_ini: Math.round(targetBulanIni),
+    pencapaian_target_persen: targetBulanIni > 0 ? +((curTotal / targetBulanIni) * 100).toFixed(1) : null,
+    ytd_tahun_ini: { periode: `Jan-${MONTH_NAMES[bulanNum - 1]} ${tahunNum}`, total: Math.round(ytdThisTotal) },
+    ytd_tahun_lalu: { periode: `Jan-${MONTH_NAMES[bulanNum - 1]} ${tahunNum - 1}`, total: Math.round(ytdLastTotal) },
+    perubahan_ytd_persen: ytdLastTotal > 0 ? +(((ytdThisTotal - ytdLastTotal) / ytdLastTotal) * 100).toFixed(1) : null,
+    top_produk_bulan_ini: topN(curByProd, 10),
+    produk_pendorong_perubahan_bulanan: topDrivers(curByProd, prevByProd, "bulan_ini", "bulan_lalu", 5),
+    produk_pendorong_perubahan_ytd: topDrivers(ytdThisByProd, ytdLastByProd, "ytd_tahun_ini", "ytd_tahun_lalu", 5),
+  };
+  if (breakdownByKota) {
+    result.top_kota_bulan_ini = topN(curByKota, 10);
+    result.kota_pendorong_perubahan_bulanan = topDrivers(curByKota, prevByKota, "bulan_ini", "bulan_lalu", 5);
+    result.kota_pendorong_perubahan_ytd = topDrivers(ytdThisByKota, ytdLastByKota, "ytd_tahun_ini", "ytd_tahun_lalu", 5);
+  }
+  return result;
+}
+
 function toolGetKotaBulanDetail({ kota, bulan, tahun, trx }) {
   const raw = loadRawData();
   const d = raw.dicts;
   const kotaIdx = findIndexLoose(d.kota, kota);
   if (kotaIdx === -1) return { error: `Kota "${kota}" tidak ditemukan di data.` };
-  const trxLabel = /out/i.test(trx) ? "Selling Out" : "Selling In";
-  const trxIdx = d.trx.indexOf(trxLabel);
 
   const bulanNum = Math.max(1, Math.min(12, parseInt(bulan, 10) || 1));
-  const targetYm = `${tahun}-${String(bulanNum).padStart(2, "0")}`;
-  let prevYear = parseInt(tahun, 10), prevMonth = bulanNum - 1;
-  if (prevMonth < 1) { prevMonth = 12; prevYear -= 1; }
-  const prevYm = `${prevYear}-${String(prevMonth).padStart(2, "0")}`;
-  const targetYmIdx = d.ym.indexOf(targetYm);
-  const prevYmIdx = d.ym.indexOf(prevYm);
-
-  const tx = raw.tx;
-  const curByProd = new Map(), prevByProd = new Map();
-  let curTotal = 0, prevTotal = 0;
-  for (let i = 0; i < tx.ym.length; i++) {
-    if (tx.kota[i] !== kotaIdx || tx.trx[i] !== trxIdx) continue;
-    const prodLabel = d.prod[tx.prod[i]];
-    if (tx.ym[i] === targetYmIdx) {
-      curByProd.set(prodLabel, (curByProd.get(prodLabel) || 0) + tx.amt[i]);
-      curTotal += tx.amt[i];
-    } else if (tx.ym[i] === prevYmIdx) {
-      prevByProd.set(prodLabel, (prevByProd.get(prodLabel) || 0) + tx.amt[i]);
-      prevTotal += tx.amt[i];
-    }
+  const tahunNum = parseInt(tahun, 10);
+  if (d.ym.indexOf(`${tahunNum}-${String(bulanNum).padStart(2, "0")}`) === -1) {
+    return { error: `Bulan ${tahunNum}-${String(bulanNum).padStart(2, "0")} tidak ada di data.` };
   }
-  if (targetYmIdx === -1) return { error: `Bulan ${targetYm} tidak ada di data.` };
 
-  const topProduk = Array.from(curByProd.entries())
-    .map(([nama, value]) => ({ nama, value: Math.round(value), kontribusi_persen: curTotal > 0 ? +((value / curTotal) * 100).toFixed(1) : 0 }))
-    .sort((a, b) => b.value - a.value).slice(0, 10);
+  function detailFor(trxLabel, tgtLabel) {
+    return buildLocationDetail({
+      raw,
+      matchTx: i => raw.tx.kota[i] === kotaIdx,
+      matchTgt: i => raw.tgt.kota[i] === kotaIdx,
+      bulanNum, tahunNum, trxLabel, tgtLabel, breakdownByKota: false,
+    });
+  }
 
-  const allProd = new Set([...curByProd.keys(), ...prevByProd.keys()]);
-  const drivers = Array.from(allProd).map(nama => {
-    const cur = curByProd.get(nama) || 0, prev = prevByProd.get(nama) || 0;
-    return { nama, bulan_ini: Math.round(cur), bulan_lalu: Math.round(prev), perubahan: Math.round(cur - prev) };
-  }).sort((a, b) => Math.abs(b.perubahan) - Math.abs(a.perubahan)).slice(0, 8);
+  const result = { kota: d.kota[kotaIdx] };
+  const trxNorm = trx ? (/out/i.test(trx) ? "Selling Out" : "Selling In") : null;
+  if (trxNorm === "Selling In" || !trxNorm) result.selling_in = detailFor("Selling In", "Target SI");
+  if (trxNorm === "Selling Out" || !trxNorm) result.selling_out = detailFor("Selling Out", "Target SO");
+  return result;
+}
 
-  return {
-    kota: d.kota[kotaIdx],
-    kategori_trx: trxLabel,
-    bulan_ini: { periode: `${MONTH_NAMES[bulanNum - 1]} ${tahun}`, total: Math.round(curTotal) },
-    bulan_lalu: prevYmIdx === -1 ? null : { periode: `${MONTH_NAMES[prevMonth - 1]} ${prevYear}`, total: Math.round(prevTotal) },
-    perubahan_persen: prevTotal > 0 ? +(((curTotal - prevTotal) / prevTotal) * 100).toFixed(1) : null,
-    top_produk_bulan_ini: topProduk,
-    produk_pendorong_perubahan: drivers,
-  };
+/* Region/Area version of the same detail, with drivers broken down by BOTH
+   Kota and Produk (since "which city drove it" is meaningful at this level). */
+function toolGetRegionBulanDetail({ region, bulan, tahun, trx }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const regionIdx = findIndexLoose(d.reg, region);
+  if (regionIdx === -1) return { error: `Region "${region}" tidak ditemukan.` };
+
+  const bulanNum = Math.max(1, Math.min(12, parseInt(bulan, 10) || 1));
+  const tahunNum = parseInt(tahun, 10);
+  if (d.ym.indexOf(`${tahunNum}-${String(bulanNum).padStart(2, "0")}`) === -1) {
+    return { error: `Bulan ${tahunNum}-${String(bulanNum).padStart(2, "0")} tidak ada di data.` };
+  }
+
+  function detailFor(trxLabel, tgtLabel) {
+    return buildLocationDetail({
+      raw,
+      matchTx: i => raw.tx.reg[i] === regionIdx,
+      matchTgt: i => raw.tgt.reg[i] === regionIdx,
+      bulanNum, tahunNum, trxLabel, tgtLabel, breakdownByKota: true,
+    });
+  }
+
+  const result = { region: d.reg[regionIdx] };
+  const trxNorm = trx ? (/out/i.test(trx) ? "Selling Out" : "Selling In") : null;
+  if (trxNorm === "Selling In" || !trxNorm) result.selling_in = detailFor("Selling In", "Target SI");
+  if (trxNorm === "Selling Out" || !trxNorm) result.selling_out = detailFor("Selling Out", "Target SO");
+  return result;
+}
+
+function toolGetAreaBulanDetail({ area, bulan, tahun, trx }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const areaIdx = findIndexLoose(d.area, area);
+  if (areaIdx === -1) return { error: `Area "${area}" tidak ditemukan.` };
+
+  const bulanNum = Math.max(1, Math.min(12, parseInt(bulan, 10) || 1));
+  const tahunNum = parseInt(tahun, 10);
+  if (d.ym.indexOf(`${tahunNum}-${String(bulanNum).padStart(2, "0")}`) === -1) {
+    return { error: `Bulan ${tahunNum}-${String(bulanNum).padStart(2, "0")} tidak ada di data.` };
+  }
+
+  function detailFor(trxLabel, tgtLabel) {
+    return buildLocationDetail({
+      raw,
+      matchTx: i => raw.tx.area[i] === areaIdx,
+      matchTgt: i => raw.tgt.area[i] === areaIdx,
+      bulanNum, tahunNum, trxLabel, tgtLabel, breakdownByKota: true,
+    });
+  }
+
+  const result = { area: d.area[areaIdx] };
+  const trxNorm = trx ? (/out/i.test(trx) ? "Selling Out" : "Selling In") : null;
+  if (trxNorm === "Selling In" || !trxNorm) result.selling_in = detailFor("Selling In", "Target SI");
+  if (trxNorm === "Selling Out" || !trxNorm) result.selling_out = detailFor("Selling Out", "Target SO");
+  return result;
 }
 
 /* Tool 2: detail 1 produk pada 1 bulan tertentu, breakdown per kota. */
@@ -554,16 +681,50 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_kota_bulan_detail",
-      description: "Ambil detail penjualan satu kota pada satu bulan tertentu: total value, breakdown per produk, dan produk-produk yang paling mendorong kenaikan/penurunan dibanding bulan sebelumnya. Gunakan ini kalau user tanya soal kota tertentu di bulan tertentu.",
+      description: "Ambil detail LENGKAP penjualan satu kota pada satu bulan tertentu: total value, target bulan itu, %Achievement, breakdown per produk, perubahan vs bulan sebelumnya (MoM) beserta produk pendorongnya, DAN perubahan YTD tahun ini vs YTD tahun lalu (Jan sampai bulan itu) beserta produk pendorongnya. Kalau user tidak sebut spesifik Selling In atau Selling Out, KOSONGKAN parameter trx - tool akan otomatis mengembalikan data Selling In DAN Selling Out sekaligus. Kalau user sebut spesifik salah satu, isi trx sesuai itu saja.",
       parameters: {
         type: "object",
         properties: {
           kota: { type: "string", description: "Nama kota, contoh: Medan, Bandung, Surabaya" },
           bulan: { type: "integer", description: "Nomor bulan 1-12 (1=Januari, 2=Februari, dst)" },
           tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
-          trx: { type: "string", enum: ["Selling In", "Selling Out"], description: "Kategori transaksi" },
+          trx: { type: "string", enum: ["Selling In", "Selling Out"], description: "Opsional: kategori transaksi. Kosongkan kalau user tidak menyebut salah satu secara spesifik." },
         },
-        required: ["kota", "bulan", "tahun", "trx"],
+        required: ["kota", "bulan", "tahun"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_region_bulan_detail",
+      description: "Sama seperti get_kota_bulan_detail, TAPI untuk satu REGION (Central/East/West/MT/HO/Online) pada satu bulan tertentu: total, target, %Achievement, MoM, YTD vs tahun lalu. BEDANYA: driver kenaikan/penurunan diberikan untuk DUA dimensi - Kota (kota mana yang mendorong perubahan) DAN Produk (produk mana yang mendorong perubahan). Gunakan ini kalau user tanya soal pencapaian satu REGION di satu bulan tertentu. Kosongkan trx kalau user tidak sebut spesifik Selling In/Out.",
+      parameters: {
+        type: "object",
+        properties: {
+          region: { type: "string", description: "Nama region: Central, East, West, MT, HO, atau Online" },
+          bulan: { type: "integer", description: "Nomor bulan 1-12" },
+          tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
+          trx: { type: "string", enum: ["Selling In", "Selling Out"], description: "Opsional: kosongkan kalau user tidak menyebut salah satu secara spesifik." },
+        },
+        required: ["region", "bulan", "tahun"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_area_bulan_detail",
+      description: "Sama seperti get_region_bulan_detail, TAPI untuk satu AREA (subdivisi dari region, contoh: Central I, West II) pada satu bulan tertentu. Driver kenaikan/penurunan juga diberikan untuk Kota DAN Produk. Gunakan ini kalau user tanya soal pencapaian satu AREA di satu bulan tertentu. Kosongkan trx kalau user tidak sebut spesifik Selling In/Out.",
+      parameters: {
+        type: "object",
+        properties: {
+          area: { type: "string", description: "Nama area, contoh: Central I, East II, West III" },
+          bulan: { type: "integer", description: "Nomor bulan 1-12" },
+          tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
+          trx: { type: "string", enum: ["Selling In", "Selling Out"], description: "Opsional: kosongkan kalau user tidak menyebut salah satu secara spesifik." },
+        },
+        required: ["area", "bulan", "tahun"],
       },
     },
   },
@@ -592,6 +753,8 @@ function runTool(name, args) {
     if (name === "get_kota_ranking_perubahan") return toolGetKotaRankingPerubahan(args);
     if (name === "get_periode_total") return toolGetPeriodeTotal(args);
     if (name === "get_kota_bulan_detail") return toolGetKotaBulanDetail(args);
+    if (name === "get_region_bulan_detail") return toolGetRegionBulanDetail(args);
+    if (name === "get_area_bulan_detail") return toolGetAreaBulanDetail(args);
     if (name === "get_produk_bulan_detail") return toolGetProdukBulanDetail(args);
     return { error: "Tool tidak dikenali: " + name };
   } catch (err) {
@@ -605,11 +768,24 @@ Kamu diberi ringkasan data nasional (JSON di dalam tag <data>): total per brand/
 
 PANDUAN PEMILIHAN TOOL - cocokkan jenis pertanyaan ke tool yang TEPAT di bawah ini:
 
-1. Pertanyaan menyebut SATU KOTA + SATU BULAN tertentu (contoh: "penjualan Banjarmasin bulan April", "kenapa Medan turun bulan Juni") -> PAKAI get_kota_bulan_detail. INI TIDAK ADA HUBUNGANNYA DENGAN STOK - jangan sebut-sebut data stock untuk pertanyaan seperti ini.
-2. Pertanyaan menyebut SATU PRODUK + SATU BULAN tertentu -> PAKAI get_produk_bulan_detail.
-3. Pertanyaan "kota mana yang paling naik/turun" (opsional dalam satu region) -> PAKAI get_kota_ranking_perubahan dengan parameter arah yang sesuai (turun/naik/semua). Jangan menjawab dari nama kota di percakapan sebelumnya - kota itu belum tentu relevan untuk pertanyaan baru ini, selalu panggil tool lagi.
-4. Pertanyaan soal TOTAL/YTD/rentang bulan/per region/per brand (angka akumulasi) -> PAKAI get_periode_total. Untuk membandingkan 2 periode/tahun, panggil tool ini 2 kali.
-5. Pertanyaan soal STOK, Days of Inventory (DOI), atau kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving) -> PAKAI get_stock_status. Ini HANYA untuk pertanyaan yang eksplisit menyebut stok/DOI/pergerakan produk - jangan pakai tool ini untuk pertanyaan penjualan biasa.
+1. Pertanyaan menyebut SATU KOTA + SATU BULAN tertentu (contoh: "penjualan Banjarmasin bulan April", "kenapa Medan turun bulan Juni", "bagaimana pencapaian kota X bulan Y") -> PAKAI get_kota_bulan_detail. INI TIDAK ADA HUBUNGANNYA DENGAN STOK - jangan sebut-sebut data stock untuk pertanyaan seperti ini.
+
+   FORMAT JAWABAN WAJIB untuk pertanyaan "bagaimana pencapaian [kota] bulan [X]" (atau semacamnya):
+   Kalau user sebut spesifik Selling In ATAU Selling Out saja (kosongkan trx di tool sesuai itu tidak berlaku - isi trx sesuai yang disebut), jawab dalam bentuk poin-poin berikut untuk kategori itu SAJA:
+   - Total penjualan bulan tersebut
+   - % Achievement terhadap target bulan itu, DAN sebutkan juga angka targetnya
+   - Perubahan dibanding bulan lalu (MoM), dan produk apa yang mendorong kenaikan/penurunan tersebut
+   - Perubahan YTD tahun ini vs YTD periode sama tahun lalu, dan produk apa yang mendorong kenaikan/penurunan tersebut
+
+   Kalau user TIDAK menyebut spesifik Selling In atau Selling Out (tanya "pencapaian" secara umum) -> KOSONGKAN parameter trx saat memanggil tool (supaya dapat data Selling In & Selling Out sekaligus), lalu jawab dalam 2 PARAGRAF TERPISAH (bukan poin-poin): paragraf pertama jabarkan Selling In (mencakup 4 hal di atas dalam bentuk kalimat), paragraf baru berikutnya jabarkan Selling Out (juga mencakup 4 hal yang sama).
+
+2. Pertanyaan menyebut SATU REGION (Central/East/West/MT/HO/Online) + SATU BULAN tertentu (contoh: "bagaimana pencapaian region Central bulan April") -> PAKAI get_region_bulan_detail. Pertanyaan menyebut SATU AREA (contoh: "Central I") + SATU BULAN -> PAKAI get_area_bulan_detail.
+
+   FORMAT JAWABAN sama persis seperti kota (4 poin: Total, %Achievement+Target, MoM+pendorong, YTD+pendorong; poin-poin kalau trx spesifik disebut, 2 paragraf kalau tidak) - TAPI untuk poin "pendorong kenaikan/penurunan" (MoM maupun YTD), sebutkan dari DUA dimensi: KOTA mana yang paling mendorong perubahan itu, DAN PRODUK mana yang paling mendorong perubahan itu (bukan produk saja seperti level kota).
+3. Pertanyaan menyebut SATU PRODUK + SATU BULAN tertentu -> PAKAI get_produk_bulan_detail.
+4. Pertanyaan "kota mana yang paling naik/turun" (opsional dalam satu region) -> PAKAI get_kota_ranking_perubahan dengan parameter arah yang sesuai (turun/naik/semua). Jangan menjawab dari nama kota di percakapan sebelumnya - kota itu belum tentu relevan untuk pertanyaan baru ini, selalu panggil tool lagi.
+5. Pertanyaan soal TOTAL/YTD/rentang bulan secara umum TANPA menyebut satu kota/region/area spesifik (mis. "total Selling In nasional YTD Mei") -> PAKAI get_periode_total. Untuk membandingkan 2 periode/tahun, panggil tool ini 2 kali.
+6. Pertanyaan soal STOK, Days of Inventory (DOI), atau kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving) -> PAKAI get_stock_status. Ini HANYA untuk pertanyaan yang eksplisit menyebut stok/DOI/pergerakan produk - jangan pakai tool ini untuk pertanyaan penjualan biasa.
 
 ATURAN UMUM:
 - Kalau ragu tool mana yang cocok, pilih berdasar KATA KUNCI di pertanyaan (nama kota+bulan, nama produk+bulan, "naik/turun", "total/YTD", atau "stok/DOI/moving") - jangan pernah melompat ke kesimpulan "data tidak tersedia" sebelum mencoba tool yang relevan di atas.
