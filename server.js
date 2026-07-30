@@ -792,26 +792,33 @@ ATURAN UMUM:
 - Jangan pernah menghitung sendiri angka dari ringkasan <data> - selalu pakai tool untuk angka pasti.
 - Jangan pernah mengarang angka atau nama kota/produk yang tidak ada di hasil tool. Kalau tool mengembalikan error/daftar kosong, sampaikan apa adanya ke user - jangan alihkan ke topik lain (misal stok) yang tidak ditanyakan.
 
-Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.`;
+Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.
+
+PENTING: Jawab LANGSUNG dengan jawaban akhir saja. JANGAN pernah menuliskan proses berpikirmu (misal "Let me...", "We have...", "Need to calculate...", analisis internal, atau catatan kerja apa pun) di dalam jawaban - user hanya boleh melihat kesimpulan akhir yang sudah rapi dalam Bahasa Indonesia.`;
 
 async function callProvider(provider, messages, tools) {
   const headers = { "Content-Type": "application/json", "Authorization": `Bearer ${provider.key}` };
+  const body = {
+    model: provider.model,
+    messages,
+    tools,
+    tool_choice: tools ? "auto" : undefined,
+    temperature: 0.3,
+    max_tokens: 700,
+  };
   if (provider.name === "openrouter") {
     // Optional but recommended by OpenRouter for routing/analytics purposes
     headers["HTTP-Referer"] = "https://dashboardcbsempurna.baried.my.id";
     headers["X-Title"] = "CBS Sales Assistant";
+    // Some free/rotating models on OpenRouter are "reasoning" models that
+    // otherwise leak their raw chain-of-thought into the answer text -
+    // this tells OpenRouter to keep reasoning internal and never include it.
+    body.reasoning = { exclude: true };
   }
   const res = await fetch(provider.url, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model: provider.model,
-      messages,
-      tools,
-      tool_choice: tools ? "auto" : undefined,
-      temperature: 0.3,
-      max_tokens: 700,
-    }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   // Some providers (notably OpenRouter serving free/rotating models) return
