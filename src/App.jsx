@@ -7,7 +7,7 @@ import {
   LayoutDashboard, MapPin, Package, Target, Sparkles, UploadCloud,
   LogOut, Lock, User, ChevronDown, ChevronLeft, ChevronRight, X, Search, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Building2, Globe2, CheckCircle2, AlertCircle,
-  ArrowUpDown, ChevronUp, Download, FileText, Archive
+  ArrowUpDown, ChevronUp, Download, FileText, Archive, MessageCircle
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -770,6 +770,7 @@ function GlobalStyle() {
   return (
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+      html { font-size: 92%; }
       .cbs-root { font-family: 'Inter', -apple-system, sans-serif; color: #241934; background:#F7F5FA; }
       .cbs-display { font-family: 'Inter', -apple-system, sans-serif; font-weight: 700; }
       .cbs-card { background:#fff; border-radius:20px; border:1px solid #EDE7F5; box-shadow: 0 1px 2px rgba(36,25,52,0.04), 0 8px 24px -12px rgba(36,25,52,0.08); }
@@ -2114,13 +2115,13 @@ function AIChatWidget({ M }) {
       <button onClick={() => setOpen(o => !o)} title="AI Sales Assistant"
         className="fixed z-40 rounded-full flex items-center justify-center"
         style={{ bottom: 22, right: 22, width: 54, height: 54, background: "linear-gradient(135deg,#7FB4E8,#B6A4EA)", boxShadow: "0 10px 28px -6px rgba(127,180,232,0.55)" }}>
-        {open ? <X size={22} color="#fff" /> : <Sparkles size={22} color="#fff" />}
+        {open ? <X size={22} color="#fff" /> : <MessageCircle size={22} color="#fff" />}
       </button>
       {open && (
         <div className="fixed z-40 flex flex-col rounded-2xl overflow-hidden cbs-fadein"
           style={{ bottom: 86, right: 22, width: 340, maxWidth: "calc(100vw - 32px)", height: 460, background: "#fff", boxShadow: "0 20px 50px -12px rgba(36,25,52,0.35)", border: "1px solid #EDE7F5" }}>
           <div className="px-4 py-3" style={{ background: "linear-gradient(135deg,#2E2049,#5F72A8)" }}>
-            <div className="text-white text-sm font-semibold">✨ CBS Sales Assistant</div>
+            <div className="text-white text-sm font-semibold flex items-center gap-1.5"><MessageCircle size={15} /> CBS Sales Assistant</div>
             <div className="text-[10px]" style={{ color: "#C9C3DE" }}>Tanya seputar data penjualan Anda</div>
           </div>
           <div ref={scrollRef} className="flex-1 overflow-y-auto cbs-scroll px-3 py-3 space-y-2">
@@ -2417,7 +2418,7 @@ export default function App() {
   if (!user) return <LoginScreen onLogin={handleLogin} />;
 
   return (
-    <div className="cbs-root min-h-screen flex">
+    <div className="cbs-root h-screen flex overflow-hidden">
       <GlobalStyle />
       <Sidebar page={page} setPage={setPage} user={user} onLogout={handleLogout} dataMeta={dataMeta}
         collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(c => !c)} />
@@ -2430,15 +2431,15 @@ export default function App() {
             </div>
             <div className="text-xs" style={{ color: "#8A7FA0" }}>PT. Cahaya Bintang Sempurna · Sales Performance</div>
           </div>
-          <div className="flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl" style={{ background: "#241934" }}>
-            <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}>
+          <div className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-full border" style={{ background: "#FAFAFA", borderColor: "#EDE7F5" }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0" style={{ background: "#EDE7F5", color: "#6B5CA5" }}>
               {user.name.slice(0, 1)}
             </div>
             <div className="hidden sm:block">
-              <div className="text-xs text-white leading-tight">{user.name}</div>
-              <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A7FA0" }}>{user.role}</div>
+              <div className="text-sm font-semibold leading-tight" style={{ color: "#241934" }}>{user.name}</div>
+              <div className="text-xs leading-tight" style={{ color: "#B6A4EA" }}>{user.role}</div>
             </div>
-            <button onClick={handleLogout} title="Keluar" className="ml-1"><LogOut size={15} color="#B8AECB" /></button>
+            <button onClick={handleLogout} title="Keluar" className="ml-1 shrink-0"><LogOut size={15} color="#B8AECB" /></button>
           </div>
         </div>
         <div className="flex-1 p-4 md:p-8 overflow-y-auto cbs-scroll">
