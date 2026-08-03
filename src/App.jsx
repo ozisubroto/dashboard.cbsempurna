@@ -2036,10 +2036,15 @@ function buildAiContext(M) {
     return out;
   }
 
+  // Kept intentionally lean (annual totals + top 5 only, no monthly arrays) -
+  // dedicated tools (get_periode_total, get_kota_bulan_detail,
+  // get_region_bulan_detail, get_area_bulan_detail) fetch precise
+  // month-level data on demand, so this context doesn't need to carry it.
+  // Smaller context = fewer tokens per request = less likely to hit
+  // provider rate limits (e.g. Groq's free-tier TPM cap).
   return {
     tahun: year,
     tahun_pembanding: growthSI.prevYear,
-    catatan: "per_brand_bulanan dan per_region_bulanan berisi rincian value per bulan (Jan-Des) untuk tahun berjalan.",
     selling_in: {
       total: Math.round(siBrand.total),
       target: Math.round(targetSI),
@@ -2047,8 +2052,6 @@ function buildAiContext(M) {
       growth_persen_vs_tahun_lalu: +growthSI.growthPct.toFixed(1),
       per_brand: byKeyTotals(siBrand),
       per_region: byKeyTotals(siRegion),
-      per_brand_bulanan: siBrand.chartData,
-      per_region_bulanan: siRegion.chartData,
     },
     selling_out: {
       total: Math.round(soBrand.total),
@@ -2057,8 +2060,6 @@ function buildAiContext(M) {
       growth_persen_vs_tahun_lalu: +growthSO.growthPct.toFixed(1),
       per_brand: byKeyTotals(soBrand),
       per_region: byKeyTotals(soRegion),
-      per_brand_bulanan: soBrand.chartData,
-      per_region_bulanan: soRegion.chartData,
     },
     top_5_kota_selling_out: ins.topKotaSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
     top_5_produk_selling_out: ins.topProdukSO.slice(0, 5).map(k => ({ nama: k.name, value: Math.round(k.value), kontribusi_persen: +k.pct.toFixed(1) })),
@@ -2092,7 +2093,7 @@ function AIChatWidget({ M }) {
     setBusy(true);
     try {
       const context = buildAiContext(M);
-      const history = messages.slice(-6).map(m => ({ role: m.role, content: m.content }));
+      const history = messages.slice(-4).map(m => ({ role: m.role, content: m.content }));
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
