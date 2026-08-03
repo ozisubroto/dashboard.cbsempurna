@@ -109,7 +109,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 /* Google AI Studio key (aistudio.google.com), free tier, no credit card.
    Uses Gemini's official OpenAI-compatibility shim - same request/response
    shape as OpenAI, just a different base URL. */
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
 const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY || "";
@@ -523,8 +523,22 @@ function toolGetStockStatus({ status_stock, status_produk, brand, kategori, prod
   if (status_stock) filtered = filtered.filter(r => r.status_stock.toLowerCase() === String(status_stock).toLowerCase());
   if (status_produk) filtered = filtered.filter(r => r.status_produk.toLowerCase() === String(status_produk).toLowerCase());
   if (brand) filtered = filtered.filter(r => r.brand.toLowerCase().includes(String(brand).toLowerCase()));
-  if (kategori) filtered = filtered.filter(r => r.kategori.toLowerCase().includes(String(kategori).toLowerCase()));
-  if (produk) filtered = filtered.filter(r => r.nama.toLowerCase().includes(String(produk).toLowerCase()));
+  if (kategori) {
+    const byKategori = filtered.filter(r => r.kategori.toLowerCase().includes(String(kategori).toLowerCase()));
+    if (byKategori.length > 0) {
+      filtered = byKategori;
+    } else {
+      // "kategori" didn't match any real product category - the model may
+      // have actually meant this as a product name/keyword (a recurring mix-up
+      // across different AI providers). Re-try it as a product-name search.
+      const nameIdx = new Set(findProductMatches(filtered.map(r => r.nama), kategori, 50));
+      filtered = filtered.filter((r, i) => nameIdx.has(i));
+    }
+  }
+  if (produk) {
+    const prodIdx = new Set(findProductMatches(filtered.map(r => r.nama), produk, 50));
+    filtered = filtered.filter((r, i) => prodIdx.has(i));
+  }
 
   if (sort_by === "doi_tertinggi") filtered.sort((a, b) => (b.doi ?? -1) - (a.doi ?? -1));
   else if (sort_by === "doi_terendah") filtered.sort((a, b) => (a.doi ?? -1) - (b.doi ?? -1));
@@ -748,8 +762,8 @@ const TOOLS = [
           status_stock: { type: "string", enum: ["Dead Stock", "Under Stock", "Normal Stock", "Over Stock", "Critical Over Stock"], description: "Opsional: filter status stock" },
           status_produk: { type: "string", enum: ["Fast Moving", "Slow Moving", "Erratic Moving", "Dead Moving"], description: "Opsional: filter kategori pergerakan produk" },
           brand: { type: "string", description: "Opsional: filter nama brand" },
-          kategori: { type: "string", description: "Opsional: filter kategori produk (mis. Sheet Mask, Lip Tint)" },
-          produk: { type: "string", description: "Opsional: filter/cari nama produk tertentu" },
+          kategori: { type: "string", description: "Opsional: filter KATEGORI produk resmi (mis. Sheet Mask, Lip Tint) - BUKAN nama/kata sifat produk seperti 'cherry'. Kalau user sebut kata kunci nama produk, pakai parameter 'produk', bukan ini." },
+          produk: { type: "string", description: "Opsional: cari berdasar NAMA/KATA KUNCI produk (boleh sebagian, mis. 'cherry', 'lip tint'). PAKAI INI kalau user menyebut ciri/kata dalam nama produk, meskipun kata itu mirip nama kategori." },
           sort_by: { type: "string", enum: ["avg_value", "doi_tertinggi", "doi_terendah"], description: "Urutan hasil: avg_value (default, produk paling laris dulu), doi_tertinggi, atau doi_terendah" },
           top_n: { type: "integer", description: "Jumlah produk yang ditampilkan, default 15, maksimal 50" },
         },
@@ -1030,7 +1044,12 @@ app.post("/api/ai/chat", async (req, res) => {
         const result = runTool(call.function.name, args);
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
       }
-      data = await callProvider(provider, messages, TOOLS);
+      // Route follow-up rounds through the SAME fallback chain too - if the
+      // provider that answered round 1 fails on round 2 (e.g. it hits its
+      // own rate limit mid-conversation), this lets a different provider
+      // pick up the rest of the conversation instead of the whole request
+      // failing outright.
+      ({ data, provider } = await callWithFallback(messages, TOOLS));
       rounds += 1;
     }
     const answer = data.choices?.[0]?.message?.content || "(Tidak ada jawaban.)";
