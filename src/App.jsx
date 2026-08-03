@@ -2437,7 +2437,6 @@ export default function App() {
             </div>
             <div className="hidden sm:block">
               <div className="text-sm font-semibold leading-tight" style={{ color: "#241934" }}>{user.name}</div>
-              <div className="text-xs leading-tight" style={{ color: "#B6A4EA" }}>{user.role}</div>
             </div>
             <button onClick={handleLogout} title="Keluar" className="ml-1 shrink-0"><LogOut size={15} color="#B8AECB" /></button>
           </div>
