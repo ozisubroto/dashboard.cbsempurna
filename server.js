@@ -985,6 +985,11 @@ async function callWithFallback(messages, tools) {
       } catch (err) {
         console.log(`[ai] provider "${provider.name}" attempt ${attempt + 1} failed (${err.status || "?"}): ${err.message}`);
         lastErr = err;
+        // A 429 (rate limit) won't resolve itself within our short retry
+        // delay - the provider is explicitly telling us to wait much longer
+        // than that. Skip the same-provider retry and move straight to the
+        // next configured provider instead of wasting time.
+        if (err.status === 429) break;
         if (attempt === 0) await sleep(600);
       }
     }
