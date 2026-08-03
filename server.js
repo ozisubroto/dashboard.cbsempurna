@@ -119,10 +119,18 @@ const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY || "";
 /* console.mistral.ai, free "Experiment" tier, no credit card (phone
-   verification required). Low RPM but generous monthly token pool, so it's
-   kept last in the fallback order. */
+   verification required). Low RPM but generous monthly token pool. */
 const MISTRAL_MODEL = process.env.MISTRAL_MODEL || "mistral-small-latest";
 const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
+
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
+/* platform.deepseek.com. NOT a recurring free tier like the others above -
+   new accounts get a one-time ~5M token grant, then it's pay-per-token
+   (very cheap: ~$0.14/M input, ~$0.28/M output). A real, consistent model
+   (not a rotating auto-router), so it's placed ahead of OpenRouter but
+   after the providers with a genuinely-renewing free quota. */
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 
 /* Tried in order until one succeeds. Only providers with an API key actually
    configured (via environment variable) are included, so you can enable as
@@ -136,6 +144,7 @@ const PROVIDERS = [
   { name: "gemini", url: GEMINI_URL, key: GEMINI_API_KEY, model: GEMINI_MODEL },
   { name: "cerebras", url: CEREBRAS_URL, key: CEREBRAS_API_KEY, model: CEREBRAS_MODEL },
   { name: "mistral", url: MISTRAL_URL, key: MISTRAL_API_KEY, model: MISTRAL_MODEL },
+  { name: "deepseek", url: DEEPSEEK_URL, key: DEEPSEEK_API_KEY, model: DEEPSEEK_MODEL },
   { name: "openrouter", url: OPENROUTER_URL, key: OPENROUTER_API_KEY, model: OPENROUTER_MODEL },
 ].filter(p => p.key);
 
@@ -163,6 +172,40 @@ function findIndexLoose(list, needle) {
   let idx = list.findIndex(v => String(v).toLowerCase() === n);
   if (idx === -1) idx = list.findIndex(v => String(v).toLowerCase().includes(n));
   return idx;
+}
+
+/* Product name search: unlike findIndexLoose (single best-effort match),
+   this is token-based (order-independent, e.g. "sheet mask cherry" also
+   matches "BIOAQUA Cherry Blossom ... Sheet Mask") and returns ALL matches
+   up to maxResults. Caller decides what to do with 0 / 1 / many results -
+   for 1 it proceeds normally, for many it should surface the candidates as
+   suggestions rather than failing outright. */
+function findProductMatches(prodList, needle, maxResults) {
+  const n = String(needle || "").trim().toLowerCase();
+  if (!n) return [];
+  const max = maxResults || 10;
+
+  const exact = [];
+  prodList.forEach((v, i) => { if (v.toLowerCase() === n) exact.push(i); });
+  if (exact.length) return exact;
+
+  const phrase = [];
+  prodList.forEach((v, i) => { if (v.toLowerCase().includes(n)) phrase.push(i); });
+  if (phrase.length) return phrase.slice(0, max);
+
+  // Score by how many query tokens each product name contains, then keep
+  // only the products tied for the BEST score - this stops a generic word
+  // (e.g. "mask") from swamping out a more specific one (e.g. "cherry").
+  const tokens = n.split(/\s+/).filter(Boolean);
+  let bestCount = 0;
+  const scored = [];
+  prodList.forEach((v, i) => {
+    const lower = v.toLowerCase();
+    const count = tokens.filter(t => lower.includes(t)).length;
+    if (count > 0) { scored.push({ i, count }); if (count > bestCount) bestCount = count; }
+  });
+  if (bestCount === 0) return [];
+  return scored.filter(s => s.count === bestCount).map(s => s.i).slice(0, max);
 }
 
 /* Tool 1: detail penjualan 1 kota pada 1 bulan tertentu, termasuk breakdown
@@ -352,8 +395,15 @@ function toolGetAreaBulanDetail({ area, bulan, tahun, trx }) {
 function toolGetProdukBulanDetail({ produk, bulan, tahun, trx }) {
   const raw = loadRawData();
   const d = raw.dicts;
-  const prodIdx = findIndexLoose(d.prod, produk);
-  if (prodIdx === -1) return { error: `Produk "${produk}" tidak ditemukan di data.` };
+  const matches = findProductMatches(d.prod, produk, 10);
+  if (matches.length === 0) return { error: `Produk "${produk}" tidak ditemukan di data.` };
+  if (matches.length > 1) {
+    return {
+      info: `Ada ${matches.length} produk yang cocok dengan "${produk}". Tampilkan daftar ini ke user sebagai pilihan dan minta mereka sebutkan salah satu nama yang dimaksud - JANGAN memilih sendiri salah satunya, dan JANGAN bilang "tidak ada data".`,
+      kandidat_produk: matches.map(i => d.prod[i]),
+    };
+  }
+  const prodIdx = matches[0];
   const trxLabel = /out/i.test(trx) ? "Selling Out" : "Selling In";
   const trxIdx = d.trx.indexOf(trxLabel);
   const bulanNum = Math.max(1, Math.min(12, parseInt(bulan, 10) || 1));
@@ -618,12 +668,80 @@ function toolGetPeriodeTotal({ trx, tahun, bulan_awal, bulan_akhir, region, bran
   };
 }
 
+/* Tren bulanan (Jan-Des) untuk satu tahun - opsional dipecah per brand ATAU
+   per region (bukan keduanya sekaligus). Ini yang dulu selalu ikut terkirim
+   di ringkasan <data> tiap pertanyaan (boros token) - sekarang jadi tool
+   on-demand, cuma diambil kalau memang ditanyakan. */
+function toolGetTrenBulanan({ trx, tahun, breakdown, region, brand }) {
+  const raw = loadRawData();
+  const d = raw.dicts;
+  const trxLabel = /out/i.test(trx) ? "Selling Out" : "Selling In";
+  const trxIdx = d.trx.indexOf(trxLabel);
+  const tahunNum = parseInt(tahun, 10);
+
+  const regionIdx = region ? findIndexLoose(d.reg, region) : -1;
+  if (region && regionIdx === -1) return { error: `Region "${region}" tidak ditemukan.` };
+
+  const ymIdxByMonth = new Array(13).fill(-1);
+  for (let m = 1; m <= 12; m++) ymIdxByMonth[m] = d.ym.indexOf(`${tahunNum}-${String(m).padStart(2, "0")}`);
+
+  const tx = raw.tx;
+  const mode = breakdown === "brand" ? "brand" : breakdown === "region" ? "region" : "total";
+  const perMonthByKey = {}; // month -> key -> value ; key="_total" when mode="total"
+
+  for (let i = 0; i < tx.ym.length; i++) {
+    if (tx.trx[i] !== trxIdx) continue;
+    if (regionIdx !== -1 && tx.reg[i] !== regionIdx) continue;
+    const brandLabel = d.brand[raw.prodMeta.brand[tx.prod[i]]];
+    if (brand && !brandLabel.toLowerCase().includes(String(brand).toLowerCase())) continue;
+    let m = -1;
+    for (let mm = 1; mm <= 12; mm++) { if (ymIdxByMonth[mm] === tx.ym[i]) { m = mm; break; } }
+    if (m === -1) continue;
+    const key = mode === "brand" ? brandLabel : mode === "region" ? d.reg[tx.reg[i]] : "_total";
+    if (!perMonthByKey[m]) perMonthByKey[m] = {};
+    perMonthByKey[m][key] = (perMonthByKey[m][key] || 0) + tx.amt[i];
+  }
+
+  const tren = [];
+  for (let m = 1; m <= 12; m++) {
+    const row = { bulan: MONTH_NAMES[m - 1] };
+    const monthData = perMonthByKey[m] || {};
+    if (mode === "total") row.value = Math.round(monthData._total || 0);
+    else Object.keys(monthData).forEach(k => { row[k] = Math.round(monthData[k]); });
+    tren.push(row);
+  }
+
+  return {
+    kategori_trx: trxLabel, tahun: tahunNum,
+    breakdown: mode, filter_region: region || "semua region", filter_brand: brand || "semua brand",
+    tren_bulanan: tren,
+  };
+}
+
 const TOOLS = [
   {
     type: "function",
     function: {
+      name: "get_tren_bulanan",
+      description: "Tren Jan-Des untuk 1 tahun, opsional dipecah per brand ATAU per region (bukan keduanya sekaligus). Pakai ini untuk pertanyaan yang minta rincian/tren BULANAN penuh (semua/banyak bulan sekaligus) per brand atau per region, mis. 'tren Bioaqua per bulan' atau 'penjualan tiap bulan per region'. Untuk 1 bulan/rentang tertentu saja, pakai get_periode_total, bukan ini.",
+      parameters: {
+        type: "object",
+        properties: {
+          trx: { type: "string", enum: ["Selling In", "Selling Out"] },
+          tahun: { type: "integer", description: "Tahun 4 digit, contoh 2026" },
+          breakdown: { type: "string", enum: ["brand", "region", "total"], description: "'brand' = pecah per brand tiap bulan, 'region' = pecah per region tiap bulan, 'total' = total saja tiap bulan tanpa breakdown" },
+          region: { type: "string", description: "Opsional: filter ke 1 region tertentu saja (Central/East/West/MT/HO/Online)" },
+          brand: { type: "string", description: "Opsional: filter ke 1 brand tertentu saja" },
+        },
+        required: ["trx", "tahun", "breakdown"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_stock_status",
-      description: "Ambil status Monitoring Stock produk: Days of Inventory (DOI), Status Stock (Dead/Under/Normal/Over/Critical Over Stock), dan kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving). WAJIB pakai tool ini untuk pertanyaan apa pun soal stok, DOI, atau pergerakan produk (fast/slow/dead moving) - jangan pernah menjawab dari ringkasan data biasa untuk topik ini. Bisa difilter kombinasi status_stock, status_produk, brand, kategori, dan/atau nama produk.",
+      description: "Status Monitoring Stock: DOI, Status Stock, kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving). Pakai untuk pertanyaan stok/DOI/pergerakan produk saja.",
       parameters: {
         type: "object",
         properties: {
@@ -643,7 +761,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_kota_ranking_perubahan",
-      description: "Ranking kota (opsional difilter dalam satu region tertentu) berdasarkan besarnya PERUBAHAN (naik atau turun) dibanding bulan sebelumnya, lengkap produk pendorong tiap kota. WAJIB pakai tool ini untuk pertanyaan seperti 'kota mana yang paling turun/naik di region X' - JANGAN menebak nama kota dari percakapan sebelumnya, dan JANGAN campur kota dari region lain. Kalau user cuma minta yang turun, isi arah='turun' supaya kota yang naik tidak ikut disebutkan.",
+      description: "Ranking kota (opsional per region) berdasar besarnya perubahan vs bulan lalu, + produk pendorong tiap kota. Selalu panggil ulang untuk pertanyaan baru, jangan pakai nama kota dari giliran sebelumnya.",
       parameters: {
         type: "object",
         properties: {
@@ -662,7 +780,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_periode_total",
-      description: "Hitung total value & qty secara PRESISI untuk satu rentang bulan (misalnya YTD Jan-Mei, atau 1 bulan saja), opsional difilter per region dan/atau brand. WAJIB pakai tool ini untuk pertanyaan soal total/YTD/rentang periode - JANGAN menjumlahkan sendiri dari data ringkasan bulanan karena rawan salah hitung. Untuk membandingkan 2 tahun, panggil tool ini 2 kali (sekali per tahun).",
+      description: "Total value & qty presisi untuk satu rentang bulan (YTD, dsb), opsional per region/brand. Pakai ini untuk total/YTD - jangan hitung manual. Panggil 2x untuk bandingkan 2 tahun.",
       parameters: {
         type: "object",
         properties: {
@@ -681,7 +799,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_kota_bulan_detail",
-      description: "Ambil detail LENGKAP penjualan satu kota pada satu bulan tertentu: total value, target bulan itu, %Achievement, breakdown per produk, perubahan vs bulan sebelumnya (MoM) beserta produk pendorongnya, DAN perubahan YTD tahun ini vs YTD tahun lalu (Jan sampai bulan itu) beserta produk pendorongnya. Kalau user tidak sebut spesifik Selling In atau Selling Out, KOSONGKAN parameter trx - tool akan otomatis mengembalikan data Selling In DAN Selling Out sekaligus. Kalau user sebut spesifik salah satu, isi trx sesuai itu saja.",
+      description: "Detail lengkap 1 kota di 1 bulan: total, target, %Achievement, MoM+produk pendorong, YTD vs tahun lalu+produk pendorong. Kosongkan trx untuk dapat SI+SO sekaligus.",
       parameters: {
         type: "object",
         properties: {
@@ -698,7 +816,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_region_bulan_detail",
-      description: "Sama seperti get_kota_bulan_detail, TAPI untuk satu REGION (Central/East/West/MT/HO/Online) pada satu bulan tertentu: total, target, %Achievement, MoM, YTD vs tahun lalu. BEDANYA: driver kenaikan/penurunan diberikan untuk DUA dimensi - Kota (kota mana yang mendorong perubahan) DAN Produk (produk mana yang mendorong perubahan). Gunakan ini kalau user tanya soal pencapaian satu REGION di satu bulan tertentu. Kosongkan trx kalau user tidak sebut spesifik Selling In/Out.",
+      description: "Sama seperti get_kota_bulan_detail tapi untuk 1 REGION. Driver perubahan mencakup Kota DAN Produk. Kosongkan trx untuk SI+SO sekaligus.",
       parameters: {
         type: "object",
         properties: {
@@ -715,7 +833,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_area_bulan_detail",
-      description: "Sama seperti get_region_bulan_detail, TAPI untuk satu AREA (subdivisi dari region, contoh: Central I, West II) pada satu bulan tertentu. Driver kenaikan/penurunan juga diberikan untuk Kota DAN Produk. Gunakan ini kalau user tanya soal pencapaian satu AREA di satu bulan tertentu. Kosongkan trx kalau user tidak sebut spesifik Selling In/Out.",
+      description: "Sama seperti get_region_bulan_detail tapi untuk 1 AREA (subdivisi region, mis. Central I). Driver perubahan mencakup Kota DAN Produk.",
       parameters: {
         type: "object",
         properties: {
@@ -732,7 +850,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_produk_bulan_detail",
-      description: "Ambil detail penjualan satu produk pada satu bulan tertentu, dengan breakdown per kota. Gunakan ini kalau user tanya soal produk tertentu di bulan tertentu.",
+      description: "Detail penjualan 1 produk di 1 bulan, breakdown per kota. Nama produk boleh sebagian/kata kunci (mis. 'cherry'). Kalau hasilnya 'kandidat_produk' (bukan data), berarti ada beberapa produk cocok - tampilkan daftarnya ke user sebagai pilihan, jangan bilang tidak ada data.",
       parameters: {
         type: "object",
         properties: {
@@ -749,6 +867,7 @@ const TOOLS = [
 
 function runTool(name, args) {
   try {
+    if (name === "get_tren_bulanan") return toolGetTrenBulanan(args);
     if (name === "get_stock_status") return toolGetStockStatus(args);
     if (name === "get_kota_ranking_perubahan") return toolGetKotaRankingPerubahan(args);
     if (name === "get_periode_total") return toolGetPeriodeTotal(args);
@@ -785,12 +904,14 @@ PANDUAN PEMILIHAN TOOL - cocokkan jenis pertanyaan ke tool yang TEPAT di bawah i
 3. Pertanyaan menyebut SATU PRODUK + SATU BULAN tertentu -> PAKAI get_produk_bulan_detail.
 4. Pertanyaan "kota mana yang paling naik/turun" (opsional dalam satu region) -> PAKAI get_kota_ranking_perubahan dengan parameter arah yang sesuai (turun/naik/semua). Jangan menjawab dari nama kota di percakapan sebelumnya - kota itu belum tentu relevan untuk pertanyaan baru ini, selalu panggil tool lagi.
 5. Pertanyaan soal TOTAL/YTD/rentang bulan secara umum TANPA menyebut satu kota/region/area spesifik (mis. "total Selling In nasional YTD Mei") -> PAKAI get_periode_total. Untuk membandingkan 2 periode/tahun, panggil tool ini 2 kali.
-6. Pertanyaan soal STOK, Days of Inventory (DOI), atau kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving) -> PAKAI get_stock_status. Ini HANYA untuk pertanyaan yang eksplisit menyebut stok/DOI/pergerakan produk - jangan pakai tool ini untuk pertanyaan penjualan biasa.
+6. Pertanyaan minta RINCIAN/TREN BULANAN PENUH (semua/banyak bulan sekaligus) per brand atau per region dalam 1 tahun (mis. "tren Bioaqua tiap bulan", "penjualan per bulan per region", "bandingkan performa brand per bulan") -> PAKAI get_tren_bulanan dengan breakdown="brand" atau breakdown="region" sesuai yang diminta.
+7. Pertanyaan soal STOK, Days of Inventory (DOI), atau kategori pergerakan produk (Fast/Slow/Dead/Erratic Moving) -> PAKAI get_stock_status. Ini HANYA untuk pertanyaan yang eksplisit menyebut stok/DOI/pergerakan produk - jangan pakai tool ini untuk pertanyaan penjualan biasa.
 
 ATURAN UMUM:
 - Kalau ragu tool mana yang cocok, pilih berdasar KATA KUNCI di pertanyaan (nama kota+bulan, nama produk+bulan, "naik/turun", "total/YTD", atau "stok/DOI/moving") - jangan pernah melompat ke kesimpulan "data tidak tersedia" sebelum mencoba tool yang relevan di atas.
 - Jangan pernah menghitung sendiri angka dari ringkasan <data> - selalu pakai tool untuk angka pasti.
 - Jangan pernah mengarang angka atau nama kota/produk yang tidak ada di hasil tool. Kalau tool mengembalikan error/daftar kosong, sampaikan apa adanya ke user - jangan alihkan ke topik lain (misal stok) yang tidak ditanyakan.
+- Kalau user tanya soal produk tapi cuma sebut sebagian nama/kata kunci (mis. "sheet mask cherry") dan tool mengembalikan "kandidat_produk" (beberapa produk cocok, bukan satu), JANGAN bilang "tidak ada data" - tampilkan daftar nama produk kandidat itu ke user, dan minta mereka pilih/sebutkan salah satu yang dimaksud.
 
 Jawab singkat, langsung ke inti, dalam Bahasa Indonesia. Gunakan format Rupiah yang wajar (contoh: Rp 1,2 M / Rp 850 Jt). Kalau relevan, beri 1 rekomendasi tindak lanjut singkat di akhir jawaban.
 
@@ -886,7 +1007,7 @@ app.post("/api/ai/chat", async (req, res) => {
   let messages = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: `<data>${JSON.stringify(context || {})}</data>` },
-    ...(Array.isArray(history) ? history.slice(-6) : []),
+    ...(Array.isArray(history) ? history.slice(-4) : []),
     { role: "user", content: question },
   ];
 
