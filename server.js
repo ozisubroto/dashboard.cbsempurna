@@ -1060,6 +1060,94 @@ app.post("/api/ai/chat", async (req, res) => {
   }
 });
 
+import { timingSafeEqual } from "crypto";
+
+/* ============================================================
+   ENDPOINT RINGKASAN UNTUK BUDGET TRACKER
+   - Dipanggil sekali sehari oleh Budget Tracker, bukan per pengajuan -
+     kalau endpoint ini mati atau lambat, pengajuan budget tetap bisa
+     dikirim karena Budget Tracker memakai salinan lokal.
+   - Kontrak lengkap: docs/kontrak-endpoint-dashboard-sales.md di repo
+     Budget Tracker.
+   - Basis Selling Out & Target SO, bukan Selling In / Target SI -
+     Selling In bisa digelembungkan oleh belanja promo yang sedang
+     dinilai itu sendiri, sehingga cost ratio jadi menyesatkan.
+   ============================================================ */
+const RINGKASAN_TOKEN = process.env.RINGKASAN_TOKEN || "";
+
+function wajibTokenRingkasan(req, res, next) {
+  if (!RINGKASAN_TOKEN) {
+    console.log("[ringkasan] RINGKASAN_TOKEN belum diset di environment.");
+    return res.status(500).json({ error: "RINGKASAN_TOKEN belum dikonfigurasi." });
+  }
+  const kirim = (req.headers["authorization"] || "").replace(/^Bearer /, "");
+  const a = Buffer.from(kirim);
+  const b = Buffer.from(RINGKASAN_TOKEN);
+  // timingSafeEqual melempar exception bila panjang berbeda, bukan
+  // mengembalikan false - dicek dulu supaya token salah menjawab 401,
+  // bukan 500.
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: "Token tidak sah." });
+  }
+  next();
+}
+
+app.get("/api/ringkasan/kota-bulan", wajibTokenRingkasan, (req, res) => {
+  try {
+    const tahun = parseInt(req.query.tahun, 10);
+    if (!tahun) return res.status(400).json({ error: "Parameter tahun wajib diisi." });
+
+    const raw = loadRawData();
+    const d = raw.dicts;
+    const soIdx = d.trx.indexOf("Selling Out");
+    const targetSoIdx = d.trx.indexOf("Target SO");
+    if (soIdx === -1 || targetSoIdx === -1) {
+      return res.status(500).json({ error: "Kategori 'Selling Out' atau 'Target SO' tidak ditemukan di data." });
+    }
+
+    const kunci = (kota, bulan) => `${kota}|${bulan}`;
+
+    const soPeta = new Map();
+    const tx = raw.tx;
+    for (let i = 0; i < tx.ym.length; i++) {
+      if (tx.trx[i] !== soIdx) continue;
+      const [y, m] = d.ym[tx.ym[i]].split("-").map(Number);
+      if (y !== tahun) continue;
+      const k = kunci(d.kota[tx.kota[i]], m);
+      soPeta.set(k, (soPeta.get(k) || 0) + tx.amt[i]);
+    }
+
+    const targetPeta = new Map();
+    const tgt = raw.tgt;
+    for (let i = 0; i < tgt.ym.length; i++) {
+      if (tgt.trx[i] !== targetSoIdx) continue;
+      const [y, m] = d.ym[tgt.ym[i]].split("-").map(Number);
+      if (y !== tahun) continue;
+      const k = kunci(d.kota[tgt.kota[i]], m);
+      targetPeta.set(k, (targetPeta.get(k) || 0) + tgt.amt[i]);
+    }
+
+    // Union kedua sisi: baris yang hilang (tidak tahu) dan baris bernilai
+    // nol (memang tidak ada penjualan) sengaja dibedakan, bukan disamakan.
+    const seluruhKunci = new Set([...soPeta.keys(), ...targetPeta.keys()]);
+    const hasil = [];
+    for (const k of seluruhKunci) {
+      const [kota, bulanStr] = k.split("|");
+      hasil.push({
+        kota,
+        tahun,
+        bulan: Number(bulanStr),
+        selling_out: Math.round(soPeta.get(k) || 0),
+        target: targetPeta.has(k) ? Math.round(targetPeta.get(k)) : null,
+      });
+    }
+
+    res.json(hasil);
+  } catch (err) {
+    res.status(500).json({ error: "Gagal membuat ringkasan: " + err.message });
+  }
+});
+
 /* ---------- Static frontend ---------- */
 const DIST_DIR = path.join(__dirname, "dist");
 app.use(express.static(DIST_DIR));
